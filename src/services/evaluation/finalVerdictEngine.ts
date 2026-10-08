@@ -185,7 +185,7 @@ export function runFinalVerdictEngine(
       const failDescriptions = failedItems.map((f) => {
         const c = promptAnalysis.constraints.find((cn) => cn.id === f.constraintId);
         const isPrice = f.constraintAttribute.toLowerCase().includes('price') || Boolean(c?.attribute?.toLowerCase().includes('price'));
-        const shopperVal = isPrice && c?.expectedValue ? `maximum of $${c.expectedValue}` : (f.constraintEvidence || c?.sourceText || 'requirement');
+        const shopperVal = f.constraintEvidence || c?.sourceText || (isPrice && c?.expectedValue != null ? `price boundary of $${c.expectedValue}` : 'requirement');
         const statedVal = f.claimEvidence.length > 0 ? f.claimEvidence.join(', ') : 'stated value';
         return `The stated ${f.constraintAttribute} of "${statedVal}" violates the shopper's requirement ("${shopperVal}")`;
       });

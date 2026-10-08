@@ -537,7 +537,7 @@ export function buildConciseProfessionalReport(params: ReportExportDataParams): 
   if (requirementCoverage.unknownRequirements.length > 0) {
     const missingItems = requirementCoverage.unknownRequirements.map((u) => u.sourceText).slice(0, 5);
     const andMore = requirementCoverage.unknownRequirements.length > 5 ? ` and ${requirementCoverage.unknownRequirements.length - 5} more` : '';
-    findings.push(`Unaddressed Customer Criteria: Stated criteria regarding ${missingItems.join(', ')}${andMore} could not be conclusively verified from the assistant response. Relevant statements may be present but insufficient to establish compliance; these requirements remain unconfirmed rather than treated as product defects.`);
+    findings.push(`Unconfirmed Customer Criteria: Stated criteria regarding ${missingItems.join(', ')}${andMore} could not be conclusively verified from the assistant response. Relevant statements may be present but insufficient to establish compliance; these requirements remain unconfirmed rather than treated as product defects.`);
   }
 
   // Finding on internal consistency & contradictions
@@ -750,7 +750,7 @@ export function buildDetailedProfessionalReport(params: ReportExportDataParams):
   if (requirementCoverage.unknownRequirements.length > 0) {
     const missing = requirementCoverage.unknownRequirements.map((u) => u.sourceText).slice(0, 5);
     const andMore = requirementCoverage.unknownRequirements.length > 5 ? ` and ${requirementCoverage.unknownRequirements.length - 5} more` : '';
-    keyFindings.push(`Unaddressed Customer Criteria: Stated criteria regarding ${missing.join(', ')}${andMore} could not be conclusively verified from the assistant response. Relevant statements may be present but insufficient to establish compliance; these requirements remain unconfirmed rather than treated as product defects.`);
+    keyFindings.push(`Unconfirmed Customer Criteria: Stated criteria regarding ${missing.join(', ')}${andMore} could not be conclusively verified from the assistant response. Relevant statements may be present but insufficient to establish compliance; these requirements remain unconfirmed rather than treated as product defects.`);
   }
 
   const contradictedClaims = (claimSupportResult?.records || []).filter((c) => c.internalConsistency === 'CONTRADICTED');

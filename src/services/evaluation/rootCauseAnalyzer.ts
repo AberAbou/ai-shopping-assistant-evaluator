@@ -244,7 +244,7 @@ export function analyzeRootCauses(
         rubricCriterionIds: [`R${unkV.constraintId.replace('C', '')}`],
         shopperEvidence: [unkV.constraintEvidence],
         assistantEvidence: [],
-        explanation: `Evidence needed to evaluate the shopper's requirement ("${unkV.constraintEvidence}") is absent from the assistant output.`,
+        explanation: `The assistant response does not establish the shopper's requirement ("${unkV.constraintEvidence}"). Relevant claims, if present, are insufficient to confirm compliance; this requirement remains UNKNOWN, not a confirmed product defect.`,
         confidence: 0.95,
       });
     }
