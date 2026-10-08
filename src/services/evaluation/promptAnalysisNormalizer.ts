@@ -246,6 +246,30 @@ export function normalizePromptAnalysis(
     });
   }
 
+  // Ensure explicit exclusion constraints exist if intent.explicitExclusions were identified
+  if (intent.explicitExclusions && intent.explicitExclusions.length > 0) {
+    for (const excl of intent.explicitExclusions) {
+      const lowerExcl = excl.toLowerCase();
+      const hasExclConstraint = normalizedConstraints.some(
+        c => c.polarity === 'negative' && (c.attribute.toLowerCase() === lowerExcl || String(c.expectedValue).toLowerCase() === lowerExcl)
+      );
+      if (!hasExclConstraint) {
+        const exclSource = evidenceMap[`exclusion_${lowerExcl}`] || `without ${excl}`;
+        normalizedConstraints.push({
+          id: `C${normalizedConstraints.length + 1}`,
+          attribute: lowerExcl,
+          operator: 'prohibited',
+          expectedValue: lowerExcl,
+          constraintType: 'hard',
+          polarity: 'negative',
+          sourceText: exclSource,
+          confidence: 0.98,
+          reasoning: `Explicit exclusion specified by user: product must be free of ${excl}`,
+        });
+      }
+    }
+  }
+
   const hardCount = normalizedConstraints.filter(c => c.constraintType === 'hard').length;
   const softCount = normalizedConstraints.filter(c => c.constraintType === 'soft').length;
   const negativeCount = normalizedConstraints.filter(c => c.polarity === 'negative').length;

@@ -172,7 +172,14 @@ export function verifyProductConstraintsDeterministically(
         else if (isNegative && (attr === 'leather' || String(expectedVal).toLowerCase() === 'leather')) {
           method = 'deterministic';
           const leatherClaim = productClaims.find(
-            (c) => c.claimType === 'material' && /\bleather\b/i.test(String(c.value)) && !/\b(?:no|non|synthetic)\s+leather\b/i.test(c.sourceText)
+            (c) => c.claimType === 'material' &&
+                   /\bleather\b/i.test(String(c.value)) &&
+                   !/\b(?:no|non|synthetic)\s+leather\b/i.test(c.sourceText) &&
+                   !/\b(?:leather-free|leather\s+free)\b/i.test(c.sourceText)
+          );
+          const productWideLeatherFreeClaim = productClaims.find(
+            (c) => /\b(?:100%\s+leather-free|leather-free|100%\s+vegan)\b/i.test(c.sourceText) ||
+                   /\b(?:100%\s+leather-free|leather-free|100%\s+vegan)\b/i.test(String(c.value))
           );
           const syntheticUpperClaim = productClaims.find(
             (c) => c.claimType === 'material' && /\b(?:synthetic mesh|synthetic upper|mesh|vegan)\b/i.test(String(c.value))
@@ -183,11 +190,16 @@ export function verifyProductConstraintsDeterministically(
             confidence = 1.0;
             claimEvidence = [leatherClaim.sourceText];
             reason = `Product explicitly claims to use leather, violating the exclusion constraint.`;
-          } else if (syntheticUpperClaim) {
+          } else if (productWideLeatherFreeClaim) {
             status = 'PASS';
-            confidence = 0.95;
+            confidence = 1.0;
+            claimEvidence = [productWideLeatherFreeClaim.sourceText];
+            reason = `Product is explicitly claimed to be ${productWideLeatherFreeClaim.sourceText}, providing affirmative evidence that animal leather is excluded across the entire shoe.`;
+          } else if (syntheticUpperClaim) {
+            status = 'UNKNOWN';
+            confidence = 0.90;
             claimEvidence = [syntheticUpperClaim.sourceText];
-            reason = `Product specifies a ${syntheticUpperClaim.value}, providing affirmative evidence that animal leather is excluded for the stated upper material.`;
+            reason = `Product specifies a ${syntheticUpperClaim.value}, but evidence about the upper alone does not establish that the entire shoe contains no leather.`;
           } else {
             status = 'UNKNOWN';
             confidence = 0.90;
@@ -299,6 +311,7 @@ export function verifyProductConstraintsDeterministically(
           const activityName = String(expectedVal).toLowerCase();
           const activityClaim = productClaims.find(
             (c) => (c.claimType === 'suitability' || c.claimType === 'feature') &&
+                   (!pName || c.sourceText.trim().toLowerCase() !== pName.trim().toLowerCase()) &&
                    new RegExp(`\\b${activityName}\\b`, 'i').test(c.sourceText)
           );
 

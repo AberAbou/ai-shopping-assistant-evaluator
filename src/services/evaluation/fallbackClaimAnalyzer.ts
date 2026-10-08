@@ -326,9 +326,10 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
     // 7. Materials (e.g., "synthetic mesh upper", "recycled nylon", "leather", "cotton")
     const extractedMaterials: string[] = [];
     const materialMatches = [
+      { regex: /\b(100%\s+leather-free|leather-free|100%\s+vegan)\b/i, val: '100% leather-free' },
       { regex: /(synthetic mesh(?:\s+upper)?)/i, val: 'synthetic mesh upper' },
       { regex: /(recycled nylon)/i, val: 'recycled nylon' },
-      { regex: /(leather upper|animal leather|genuine leather|leather)/i, val: 'leather' },
+      { regex: /(?<!(?:no|non|synthetic)[\s-])\b(leather upper|animal leather|genuine leather|leather)\b(?![\s-]free)/i, val: 'leather' },
       { regex: /(synthetic upper|synthetic)/i, val: 'synthetic' },
     ];
 
@@ -455,11 +456,12 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
       }
     }
 
-    // 11. Suitability / Intended Condition (e.g. "designed for freezing conditions", "for warm-weather mountain runs")
+    // 11. Suitability / Intended Condition (e.g. "specifically designed for running", "designed for freezing conditions", "built for trails")
     const suitabilityMatches = [
-      { regex: /designed for\s+([a-zA-Z\s]+conditions)/i, attr: 'climate_suitability' },
-      { regex: /designed for\s+([a-zA-Z\s]+terrain)/i, attr: 'terrain_suitability' },
-      { regex: /built for\s+([a-zA-Z\s]+trails)/i, attr: 'use_case' },
+      { regex: /(?:specifically\s+)?(?:designed|built|engineered|crafted|made|intended|suitable|ideal|perfect|great)\s+for\s+([a-zA-Z\s]*?\b(?:running|trail running|jogging|hiking|marathons?|cycling|walking|workouts?|training|gym|racing)\b)/i, attr: 'use_case' },
+      { regex: /(?:specifically\s+)?designed for\s+([a-zA-Z\s]+conditions)/i, attr: 'climate_suitability' },
+      { regex: /(?:specifically\s+)?designed for\s+([a-zA-Z\s]+terrain)/i, attr: 'terrain_suitability' },
+      { regex: /(?:built|designed|engineered)\s+for\s+([a-zA-Z\s]+trails)/i, attr: 'use_case' },
     ];
 
     for (const sm of suitabilityMatches) {

@@ -101,29 +101,33 @@ export function analyzeUserPromptDeterministically(userPrompt: string): UserProm
     );
   }
 
-  // 3. Negative Constraints / Exclusions (e.g., "no leather", "fragrance-free", "without wool", "avoid Nike")
+  // 3. Negative Constraints / Exclusions (e.g., "without leather", "no leather", "leather-free", "fragrance-free")
   const explicitExclusions: string[] = [];
   
-  // Pattern 3a: fragrance-free / chemical-free / sulfate-free / gluten-free
-  const freeMatches = text.matchAll(/\b([a-zA-Z]+)-free\b/gi);
+  // Pattern 3a: fragrance-free / leather-free / chemical-free / sulfate-free / gluten-free (also space-separated "leather free")
+  const freeMatches = text.matchAll(/\b([a-zA-Z]+)[\s-]free\b/gi);
   for (const match of freeMatches) {
     const item = match[1].toLowerCase();
-    explicitExclusions.push(item);
-    evidenceMap[`exclusion_${item}`] = match[0];
-    addConstraint(
-      item,
-      'prohibited',
-      item,
-      'hard',
-      'negative',
-      match[0],
-      0.98,
-      `Explicit negative constraint: product must be free of ${item}`
-    );
+    if (!explicitExclusions.includes(item)) {
+      explicitExclusions.push(item);
+      evidenceMap[`exclusion_${item}`] = match[0];
+      addConstraint(
+        item,
+        'prohibited',
+        item,
+        'hard',
+        'negative',
+        match[0],
+        0.98,
+        `Explicit negative constraint: product must be free of ${item}`
+      );
+    }
   }
 
-  // Pattern 3b: no leather / no wool / no nike / without fragrance / avoid leather
-  const noMatches = text.matchAll(/\b(?:no|without|avoid|not|excluding)\s+([a-zA-Z0-9\s]+?)(?:,|\.|\band\b|$)/gi);
+  // Pattern 3b: without leather / no leather / with no leather / avoid leather / excluding leather / free of leather
+  const noMatches = text.matchAll(
+    /\b(?:with\s+no|without(?:\s+any)?|no|avoid|not|excluding|free\s+of)\s+([a-zA-Z0-9\s]+?)(?=[,\.;:!?\(\)\$£€]|\b(?:under|below|less\s+than|for|with|within|around|at|between|priced|costing|budget|max|maximum|min|minimum|that|which|is|are|to|in)\b|\band\s+(?:under|below|for|with|that|which|less)\b|\s*$)/gi
+  );
   for (const match of noMatches) {
     const rawVal = match[1].trim();
     // Exclude noise words like "prefer"
@@ -132,18 +136,21 @@ export function analyzeUserPromptDeterministically(userPrompt: string): UserProm
       for (const singleItem of items) {
         const cleaned = singleItem.trim();
         if (cleaned.length > 1) {
-          explicitExclusions.push(cleaned);
-          evidenceMap[`exclusion_${cleaned}`] = match[0];
-          addConstraint(
-            cleaned,
-            'prohibited',
-            cleaned,
-            'hard',
-            'negative',
-            match[0],
-            0.98,
-            `Explicit exclusion specified by user`
-          );
+          const attrKey = cleaned.toLowerCase().includes('leather') ? 'leather' : cleaned.toLowerCase();
+          if (!explicitExclusions.includes(attrKey)) {
+            explicitExclusions.push(attrKey);
+            evidenceMap[`exclusion_${attrKey}`] = match[0];
+            addConstraint(
+              attrKey,
+              'prohibited',
+              attrKey,
+              'hard',
+              'negative',
+              match[0],
+              0.98,
+              `Explicit exclusion specified by user`
+            );
+          }
         }
       }
     }

@@ -60,13 +60,13 @@ CRITICAL EXTRACTION RULES:
 1. Extract ONLY what is stated or reasonably implied. DO NOT invent, assume, or hallucinate missing requirements (e.g., if price, brand, size, color, or material are not specified, return null or empty array).
 2. Every extracted intent element and every constraint MUST have an exact sourceText substring from the User Prompt for auditability.
 3. Classify each constraint as:
-   - "hard": Explicit non-negotiable requirements, bounds, or specifications (e.g. "under $25", "size 10", "for summer", "fragrance-free", "no leather", "lightweight", "breathable"). Descriptive adjectives expressing requested product attributes MUST be treated as hard requirements unless the wording explicitly indicates optionality.
+   - "hard": Explicit non-negotiable requirements, bounds, or specifications (e.g. "under $25", "size 10", "for summer", "fragrance-free", "no leather", "without leather", "leather-free", "lightweight", "breathable"). Descriptive adjectives expressing requested product attributes MUST be treated as hard requirements unless the wording explicitly indicates optionality.
    - "soft": Genuine preferences where the shopper indicates flexibility (e.g. "preferably black", "ideally organic", "prefer Nike if possible", "would like something stylish").
 4. Represent explicit exclusions directly:
    - polarity MUST be "negative".
    - operator MUST be "prohibited" or "excludes".
    - DO NOT silently convert an exclusion into an unrelated positive attribute.
-   - Example: "no leather" -> attribute: "leather", operator: "prohibited", polarity: "negative", sourceText: "no leather", expectedValue: "leather".
+   - Example: "no leather" / "without leather" / "leather-free" -> attribute: "leather", operator: "prohibited", polarity: "negative", sourceText: "without leather" (or exact matched text), expectedValue: "leather".
    - Example: "fragrance-free" -> attribute: "fragrance", operator: "prohibited", polarity: "negative", sourceText: "fragrance-free", expectedValue: "fragrance".
 5. Operators must be one of: "<=", "<", ">=", ">", "==", "!=", "contains", "excludes", "suitable_for", "required", "prohibited".
 6. Assign confidence scores (0.0 to 1.0) reflecting certainty.`;
