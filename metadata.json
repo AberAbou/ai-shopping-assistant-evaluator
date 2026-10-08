@@ -1,0 +1,6 @@
+{
+  "name": "AI Shopping Assistant Evaluator",
+  "description": "Automated constraint, relevance, claim, and response-quality evaluation dashboard for AI shopping assistants.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
