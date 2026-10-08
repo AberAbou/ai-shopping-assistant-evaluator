@@ -84,7 +84,7 @@ export async function runSeverityAndScoringAnalysis(
       );
 
     const pCauses = rootCauseResult.records.filter(
-      (rc) => rc.productId === pId || (products.length === 1 && !rc.productId)
+      (rc) => rc.productId === pId || (products.length === 1 && !rc.productId && rc.productName !== 'Shopping Cart')
     );
 
     const severityResult = classifyProductSeverity(
@@ -100,6 +100,13 @@ export async function runSeverityAndScoringAnalysis(
 
   // Step 2: Compute response-level severity summary
   const responseSeverity = classifyResponseSeverity(productSeverities, products);
+  if (verificationResult.cartEvaluation?.hasCartFailure && responseSeverity.overallSeverity !== 'CRITICAL') {
+    responseSeverity.overallSeverity = 'HIGH';
+    responseSeverity.primaryExplanation = 'A confirmed mandatory shopping-cart requirement failed; product-level diagnostics remain isolated.';
+  } else if (verificationResult.cartEvaluation?.cartHardGateState === 'HARD_GATE_INDETERMINATE' && ['NONE', 'INFORMATIONAL', 'LOW'].includes(responseSeverity.overallSeverity)) {
+    responseSeverity.overallSeverity = 'INDETERMINATE';
+    responseSeverity.primaryExplanation = 'Mandatory cart evidence is unresolved; UNKNOWN is not a confirmed failure.';
+  }
 
   // Step 3: Compute multidimensional product scores
   const productScores = computeAllProductEvaluationScores(

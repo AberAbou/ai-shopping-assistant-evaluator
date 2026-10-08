@@ -86,7 +86,7 @@ export function generateProductRecommendations(
     rubricResult.productsList.find((p) => p.productId === pId);
 
   const rootCauses = rootCauseResult.records.filter(
-    (rc) => rc.productId === pId || (!rc.productId && rootCauseResult.records.length === 1)
+    (rc) => rc.productId === pId || (!rc.productId && rc.productName !== 'Shopping Cart' && rootCauseResult.records.length === 1)
   );
 
   const claims = claimSupportResult.records.filter(
@@ -552,6 +552,29 @@ export function runRecommendationEngine(
 
     productSummaries[pId] = summary;
     productsList.push(summary);
+  }
+
+  // Cart-Wide Recommendations (Checkpoint 14C.1)
+  if (verificationResult.cartEvaluation && verificationResult.cartEvaluation.cartHardGateState !== 'HARD_GATE_PASS') {
+    const cartEval = verificationResult.cartEvaluation;
+    finalRecommendations.unshift({
+      recommendationId: `REC_CART_1`,
+      productId: null,
+      productName: 'Shopping Cart',
+      type: cartEval.hasCartFailure ? 'CORRECT_OR_REPLACE' : 'PROVIDE_OR_OBTAIN_EVIDENCE',
+      priority: cartEval.hasCartFailure ? 'CRITICAL' : 'HIGH',
+      title: cartEval.hasCartFailure ? 'Correct Shopping Cart Requirements' : 'Clarify Shopping Cart Evidence',
+      action: cartEval.hasCartFailure ? 'Revise item selection, requested quantities, or unit prices to satisfy every mandatory cart requirement. Do not reduce quantities below the shopper\'s request.' : 'Provide explicit quantities and unit prices, include every requested category, and reconcile conflicting stated totals before approving the cart.',
+      reason: cartEval.rationale,
+      shopperEvidence: cartEval.verifications.map((v) => v.constraintEvidence),
+      assistantEvidence: cartEval.cartItems.map((it) => `${it.quantity ?? 'Unknown'}x ${it.productName} ($${it.lineTotal ?? '?'})`),
+      constraintIds: cartEval.verifications.map((v) => v.constraintId),
+      claimIds: [],
+      verificationIds: cartEval.verifications.map((v) => v.id),
+      rubricCriterionIds: [],
+      rootCauseIds: rootCauseResult.records.filter(r => r.productName === 'Shopping Cart').map(r => r.causeId),
+      confidence: 1.0,
+    });
   }
 
   finalRecommendations.forEach((r) => {

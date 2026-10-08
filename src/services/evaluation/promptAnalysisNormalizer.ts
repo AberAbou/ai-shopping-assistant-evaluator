@@ -1,3 +1,4 @@
+import { reconcilePromptCart } from './shoppingCartSemantics';
 import {
   ExtractedIntent,
   AtomicConstraint,
@@ -225,6 +226,8 @@ export function normalizePromptAnalysis(
       sourceText,
       confidence,
       reasoning: c.reasoning || (isPreference ? 'Soft preference indicated by optionality phrasing' : 'Hard requirement without optionality qualification'),
+      scope: c.scope === 'cart' ? 'cart' : 'product',
+      targetProductCategory: c.targetProductCategory ? String(c.targetProductCategory) : null,
     });
   });
 
@@ -274,7 +277,7 @@ export function normalizePromptAnalysis(
   const softCount = normalizedConstraints.filter(c => c.constraintType === 'soft').length;
   const negativeCount = normalizedConstraints.filter(c => c.polarity === 'negative').length;
 
-  return {
+  return reconcilePromptCart({
     state: 'PROMPT_ANALYSIS_COMPLETE_FULL_EVALUATION_NOT_YET_RUN',
     analyzedAt: new Date().toISOString(),
     userPrompt: text,
@@ -289,5 +292,5 @@ export function normalizePromptAnalysis(
       confidenceScore: normalizedConstraints.length > 0 ? 0.98 : 0.6,
     },
     rawJson: rawModelOutput,
-  };
+  }, text);
 }

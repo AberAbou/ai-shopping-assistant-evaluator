@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json());
 
-const apiKey = process.env.GEMINI_API_KEY;
+const apiKey = process.env.DISABLE_MODEL_API === '1' ? undefined : process.env.GEMINI_API_KEY;
 let ai: GoogleGenAI | null = null;
 
 if (apiKey) {
@@ -69,7 +69,8 @@ CRITICAL EXTRACTION RULES:
    - Example: "no leather" / "without leather" / "leather-free" -> attribute: "leather", operator: "prohibited", polarity: "negative", sourceText: "without leather" (or exact matched text), expectedValue: "leather".
    - Example: "fragrance-free" -> attribute: "fragrance", operator: "prohibited", polarity: "negative", sourceText: "fragrance-free", expectedValue: "fragrance".
 5. Operators must be one of: "<=", "<", ">=", ">", "==", "!=", "contains", "excludes", "suitable_for", "required", "prohibited".
-6. Assign confidence scores (0.0 to 1.0) reflecting certainty.`;
+6. Assign confidence scores (0.0 to 1.0) reflecting certainty.
+7. Distinguish a combined shopping cart from mutually exclusive alternatives. Cart-wide budgets use attribute cart_total_price and scope cart. Product requirements use scope product and targetProductCategory when explicitly category-specific. Preserve strict versus inclusive bounds and hard versus optional budgets. Extract requested quantities without guessing.`;
 
     const generatePromise = ai.models.generateContent({
       model: "gemini-3.8-flash",
@@ -132,6 +133,8 @@ CRITICAL EXTRACTION RULES:
                   sourceText: { type: Type.STRING, description: "Exact substring from User Prompt" },
                   confidence: { type: Type.NUMBER, description: "Confidence between 0.0 and 1.0" },
                   reasoning: { type: Type.STRING, description: "Brief justification" },
+                  scope: { type: Type.STRING, description: "product or cart" },
+                  targetProductCategory: { type: Type.STRING, description: "Explicitly targeted product category, if any" },
                 },
                 required: ["id", "attribute", "operator", "expectedValue", "constraintType", "polarity", "sourceText", "confidence"],
               },
@@ -198,7 +201,8 @@ CRITICAL CLAIM EXTRACTION RULES:
    - "subjective": Evaluative, opinion-based, or aesthetic claims ("looks great", "comfortable", "stylish", "excellent choice").
 5. DO NOT evaluate whether the claims satisfy the shopper's prompt or whether they are truthful. ONLY extract what the assistant claimed.
 6. Every extracted product field and every atomic claim MUST have an exact sourceText substring from the LLM Output for auditability.
-7. Assign confidence scores (0.0 to 1.0) reflecting certainty.`;
+7. Assign confidence scores (0.0 to 1.0) reflecting certainty.
+8. Preserve explicitly stated quantity and per-unit prices separately from line totals. Never assume missing quantities. Response-wide stated totals must have attribute cart_total_price and no productId. Distinguish alternatives from items purchased together.`;
 
     const generatePromise = ai.models.generateContent({
       model: "gemini-3.8-flash",
@@ -218,6 +222,8 @@ CRITICAL CLAIM EXTRACTION RULES:
                   name: { type: Type.STRING, description: "Product name" },
                   brand: { type: Type.STRING, description: "Brand name or null" },
                   category: { type: Type.STRING, description: "Product category or null" },
+                  quantity: { type: Type.STRING, description: "Exact stated item quantity, without assuming one" },
+                  parsedQuantity: { type: Type.NUMBER, description: "Positive integer quantity when explicitly stated" },
                   price: {
                     type: Type.OBJECT,
                     properties: {

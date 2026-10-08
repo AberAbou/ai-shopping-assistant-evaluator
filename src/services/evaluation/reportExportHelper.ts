@@ -52,6 +52,7 @@ export interface ExportJsonPayload {
   verdictRationale: string;
   summary: FinalEvaluationResult['summary'];
   productVerdicts: FinalEvaluationResult['productVerdicts'];
+  cartEvaluation?: FinalEvaluationResult['cartEvaluation'];
   requirementCoverage: FinalEvaluationResult['requirementCoverage'];
   claimContext: FinalEvaluationResult['claimContext'];
   claimSupportAudit: Array<{
@@ -273,6 +274,7 @@ export function buildExportJsonPayload(params: ReportExportDataParams): ExportJs
     verdictRationale: finalEvaluationResult.verdictRationale,
     summary: finalEvaluationResult.summary,
     productVerdicts: finalEvaluationResult.productVerdicts,
+    cartEvaluation: finalEvaluationResult.cartEvaluation,
     requirementCoverage: finalEvaluationResult.requirementCoverage,
     claimContext: finalEvaluationResult.claimContext,
     claimSupportAudit: (claimSupportResult?.records || []).map((c) => ({
@@ -370,6 +372,20 @@ export function buildExportMarkdownReport(params: ReportExportDataParams): strin
       `- **Remediation:** ${p.remediationSummary}`,
       ``,
     ].join('\n')),
+    ...(finalEvaluationResult.cartEvaluation?.hasCartEvaluation ? [
+      `---`,
+      `## 2B. SHOPPING CART EVALUATION`,
+      `- **Cart Hard Gate:** ${finalEvaluationResult.cartEvaluation.cartHardGateState}`,
+      `- **Calculated Cart Total:** ${finalEvaluationResult.cartEvaluation.calculatedCartTotal == null ? 'Unknown' : `$${finalEvaluationResult.cartEvaluation.calculatedCartTotal}`}`,
+      `- **Stated Cart Total:** ${finalEvaluationResult.cartEvaluation.statedCartTotal == null ? 'Not stated' : `$${finalEvaluationResult.cartEvaluation.statedCartTotal}`}`,
+      `- **Effective Cart Total:** ${finalEvaluationResult.cartEvaluation.effectiveCartTotal == null ? 'Unknown' : `$${finalEvaluationResult.cartEvaluation.effectiveCartTotal}`}`,
+      `- **Items:**`,
+      ...finalEvaluationResult.cartEvaluation.cartItems.map(
+        (it) => `  - ${it.quantity ?? 'Unknown'}x ${it.productName}: $${it.unitPrice ?? '?'}${it.lineTotal !== null ? ` = $${it.lineTotal}` : ''}`
+      ),
+      `- **Cart Evaluation Rationale:** ${finalEvaluationResult.cartEvaluation.rationale}`,
+      ``,
+    ] : []),
     `---`,
     `## 3. REQUIREMENT COVERAGE SUMMARY`,
     `- **Confirmed Satisfied:** ${requirementCoverage.confirmedSatisfied.length}`,
@@ -509,7 +525,9 @@ export function buildConciseProfessionalReport(params: ReportExportDataParams): 
   if (finalVerdict === 'PASS') {
     executiveSummary = `The shopping assistant's response successfully satisfies the customer's specified requirements across all evaluated recommendations. Across ${totalProducts} evaluated product${totalProducts === 1 ? '' : 's'}, no hard requirement violations were identified, and all stated product attributes align with the shopper's criteria.`;
   } else if (finalVerdict === 'FAIL') {
-    if (totalProducts > 1 && passedProducts > 0) {
+    if (finalEvaluationResult.cartEvaluation?.hasCartFailure) {
+      executiveSummary = 'The response fails a mandatory shopping-cart requirement. Product-level assessments remain independent of cart quantities and combined budget constraints.';
+    } else if (totalProducts > 1 && passedProducts > 0) {
       executiveSummary = `The shopping assistant's response does not pass review due to requirement non-compliance in one or more recommended items. While certain recommendations met customer expectations, at least one recommended product directly violated the shopper's stated criteria, resulting in an overall failed assessment.`;
     } else {
       executiveSummary = `The shopping assistant's response fails to satisfy the customer's stated requirements. The evaluation confirmed direct violations of mandatory criteria specified in the customer prompt.`;
@@ -526,7 +544,7 @@ export function buildConciseProfessionalReport(params: ReportExportDataParams): 
     const failedDescriptions = requirementCoverage.confirmedFailed.map((f) => {
       const pName = f.productName ? `${f.productName}: ` : '';
       const evidence = f.evidenceInOutput.length > 0 ? ` (stated: "${f.evidenceInOutput.join(', ')}")` : '';
-      return `${pName}requirement "${f.sourceText}" was violated${evidence}`;
+      return `${pName}${f.type === 'soft' ? 'optional preference' : 'mandatory requirement'} "${f.sourceText}" was violated${evidence}`;
     });
     findings.push(`Requirement Violations: ${failedDescriptions.join('; ')}.`);
   } else {
@@ -640,6 +658,7 @@ export function buildConciseProfessionalReport(params: ReportExportDataParams): 
   const lines: string[] = [];
   lines.push('SHOPPING ASSISTANT RESPONSE EVALUATION');
   lines.push(`Overall Assessment: ${finalVerdict} (Severity: ${summary.overallSeverity})`);
+  lines.push(...cartReportLines(finalEvaluationResult));
   lines.push('');
   lines.push('OVERALL ASSESSMENT');
   lines.push(executiveSummary);
@@ -691,6 +710,16 @@ export function buildConciseProfessionalReport(params: ReportExportDataParams): 
  */
 export const buildProfessionalEvaluationReport = buildConciseProfessionalReport;
 
+function cartReportLines(result: FinalEvaluationResult): string[] {
+  const cart = result.cartEvaluation;
+  if (!cart?.hasCartEvaluation) return [];
+  const amount = (value: number | null) => value === null ? 'Unknown' : `$${value}`;
+  return ['SHOPPING CART EVALUATION', `Cart assessment: ${cart.cartHardGateState.replace('HARD_GATE_', '')}`,
+    `Calculated total: ${amount(cart.calculatedCartTotal)}; Stated total: ${cart.statedCartTotal === null ? 'Not stated' : amount(cart.statedCartTotal)}; Effective total: ${amount(cart.effectiveCartTotal)}`,
+    ...cart.cartItems.map(i => `${i.quantity ?? 'Unknown'}x ${i.productName}: unit price ${amount(i.unitPrice)}, line total ${amount(i.lineTotal)}`),
+    ...cart.verifications.map(v => `${v.constraintEvidence} — ${v.status}: ${v.reason}`), cart.rationale, ''];
+}
+
 /**
  * Deterministically constructs an expanded, detailed requirement-by-requirement
  * professional evaluation report from existing evaluation artifacts.
@@ -725,7 +754,9 @@ export function buildDetailedProfessionalReport(params: ReportExportDataParams):
   if (finalVerdict === 'PASS') {
     executiveSummary = `The shopping assistant's response successfully satisfies the customer's specified requirements across all evaluated recommendations. Across ${totalProducts} evaluated product${totalProducts === 1 ? '' : 's'}, no hard requirement violations were identified, and all stated product attributes align with the shopper's criteria.`;
   } else if (finalVerdict === 'FAIL') {
-    if (totalProducts > 1 && passedProducts > 0) {
+    if (finalEvaluationResult.cartEvaluation?.hasCartFailure) {
+      executiveSummary = 'The response fails a mandatory shopping-cart requirement. Product-level assessments remain independent of cart quantities and combined budget constraints.';
+    } else if (totalProducts > 1 && passedProducts > 0) {
       executiveSummary = `The shopping assistant's response does not pass review due to requirement non-compliance in one or more recommended items. While certain recommendations met customer expectations, at least one recommended product directly violated the shopper's stated criteria, resulting in an overall failed assessment.`;
     } else {
       executiveSummary = `The shopping assistant's response fails to satisfy the customer's stated requirements. The evaluation confirmed direct violations of mandatory criteria specified in the customer prompt.`;
@@ -740,7 +771,7 @@ export function buildDetailedProfessionalReport(params: ReportExportDataParams):
     const failedList = requirementCoverage.confirmedFailed.map((f) => {
       const pName = f.productName ? `${f.productName}: ` : '';
       const evidence = f.evidenceInOutput.length > 0 ? ` (stated: "${f.evidenceInOutput.join(', ')}")` : '';
-      return `${pName}constraint "${f.sourceText}" was violated${evidence}`;
+      return `${pName}${f.type === 'soft' ? 'optional preference' : 'mandatory requirement'} "${f.sourceText}" was violated${evidence}`;
     });
     keyFindings.push(`Confirmed Requirement Violations: ${failedList.join('; ')}.`);
   } else {
@@ -890,7 +921,9 @@ export function buildDetailedProfessionalReport(params: ReportExportDataParams):
 
   // 5. Cart / Aggregate Verification note (only describe checks supported by evaluation artifacts)
   let cartVerificationNote: string | undefined = undefined;
-  if (totalProducts > 1) {
+  if (finalEvaluationResult.cartEvaluation?.hasCartEvaluation) {
+    cartVerificationNote = cartReportLines(finalEvaluationResult).join('\n');
+  } else if (totalProducts > 1) {
     cartVerificationNote = 'Individual product recommendations were evaluated independently against specified criteria. Cart-level arithmetic calculations, bundle subtotals, item quantity verification, and aggregate cart budget constraints were not evaluated as no multi-item basket calculations were established in the evaluation artifacts.';
   }
 

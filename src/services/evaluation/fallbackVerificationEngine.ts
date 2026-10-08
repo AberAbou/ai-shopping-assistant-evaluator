@@ -7,7 +7,13 @@ import {
   VerificationEngineResult,
   VerificationStatus,
   VerificationMethod,
+  CartItemEvaluation,
+  CartConstraintVerification,
+  CartEvaluationResult,
+  HardGateState,
 } from '../../types/evaluation';
+import { isCartConstraint, appliesToProduct } from './shoppingCartSemantics';
+import { evaluateShoppingCart } from './shoppingCartEngine';
 
 /**
  * Deterministic and semantic verification engine.
@@ -77,6 +83,9 @@ export function verifyProductConstraintsDeterministically(
     return { hasConflict: false, conflictingEvidence: [] };
   };
 
+  const cartConstraints = constraints.filter(isCartConstraint);
+  const productConstraints = constraints.filter(c => !isCartConstraint(c));
+
   for (const product of effectiveProducts) {
     const pId = product.id;
     const pName = product.name;
@@ -85,6 +94,8 @@ export function verifyProductConstraintsDeterministically(
     const productClaims = claims.filter(
       (c) => c.productId === pId || (effectiveProducts.length === 1 && !c.productId)
     );
+
+    const relevantProductConstraints = productConstraints.filter(c => appliesToProduct(c, product));
 
     const summary: ProductVerificationSummary = {
       productId: pId,
@@ -101,7 +112,7 @@ export function verifyProductConstraintsDeterministically(
       negativeConstraintsUnknown: 0,
     };
 
-    for (const constraint of constraints) {
+    for (const constraint of relevantProductConstraints) {
       summary.totalConstraintsChecked++;
 
       let status: VerificationStatus = 'UNKNOWN';
@@ -436,6 +447,10 @@ export function verifyProductConstraintsDeterministically(
     productSummaries[pId] = summary;
   }
 
+  const cartResult = evaluateShoppingCart(cartConstraints, products, claims, nextId);
+  const cartEvaluation = cartResult.cartEvaluation;
+  records.push(...cartResult.records);
+
   // Calculate Overall Summary
   const totalPass = records.filter((r) => r.status === 'PASS').length;
   const totalFail = records.filter((r) => r.status === 'FAIL').length;
@@ -470,9 +485,11 @@ export function verifyProductConstraintsDeterministically(
       softUnknown,
       conflictsCount,
     },
+    cartEvaluation,
     rawJson: {
       records,
       productSummaries,
+      cartEvaluation,
       metadata: {
         engine: 'deterministic-semantic-verifier-v1',
         totalRecords: records.length,

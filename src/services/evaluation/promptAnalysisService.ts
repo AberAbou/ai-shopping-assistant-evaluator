@@ -1,5 +1,6 @@
 import { UserPromptAnalysisResult, ExtractedIntent, AtomicConstraint } from '../../types/evaluation';
 import { analyzeUserPromptDeterministically } from './fallbackPromptAnalyzer';
+import { reconcilePromptCart } from './shoppingCartSemantics';
 
 /**
  * Service to execute automatic analysis of the shopper's User Prompt.
@@ -29,7 +30,7 @@ export async function analyzeUserPrompt(userPrompt: string): Promise<UserPromptA
     if (response.ok) {
       const data = await response.json();
       if (data && data.intent && Array.isArray(data.constraints)) {
-        return data as UserPromptAnalysisResult;
+        return reconcilePromptCart(data as UserPromptAnalysisResult, cleanPrompt);
       }
     }
   } catch (_err) {
