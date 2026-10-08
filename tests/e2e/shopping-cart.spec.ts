@@ -11,6 +11,11 @@ const cases: Array<[string, string, string, string, boolean]> = [
   ['false PASS: quantity arithmetic', request, invalid, 'FAIL', true],
   ['false PASS: strict boundary', request, valid.replace('$20', '$22.50').replace('$80', '$85'), 'FAIL', true],
   ['conflicting total', request, valid.replace('$80', '$60'), 'INDETERMINATE', true],
+  ['review: currency-free total is unresolved', request, valid.replace('Total: $80.', 'Total: 60.'), 'INDETERMINATE', true],
+  ['review: foreign stated total is unresolved', request, valid.replace('Total: $80.', 'Total: €80.'), 'INDETERMINATE', true],
+  ['review: ranged total is unresolved', request, valid.replace('Total: $80.', 'Total: $80 or $90.'), 'INDETERMINATE', true],
+  ['review: unit-price request does not create budgets', '2 shirts at $20 each and 1 pair of shorts for $40 each; total budget under $85', valid, 'PASS', true],
+  ['review: adjacent item and cart budgets', '2 shirts under $25 each; total budget under $85; 1 pair of shorts under $45 each', valid, 'PASS', true],
   ['unknown quantities', request, valid.replace('2 running', 'running').replace('1 pair of ', ''), 'INDETERMINATE', true],
   ['alternatives', 'a jacket under $100', 'Two options: Trail Jacket ($60) is waterproof. Rain Jacket ($70) is waterproof.', 'PASS', false],
   ['leather exclusion failure', 'running shoes without leather under $120', 'I recommend genuine leather running shoes for $99.', 'FAIL', false],
@@ -53,6 +58,12 @@ for (const [name, input, output, verdict, cart] of cases) test(name, async ({ pa
     await page.getByRole('button', { name:'Detailed Report', exact:true }).click();
     await expect(page.getByText(/Cart assessment:/).last()).toBeVisible();
     expect(json.cartEvaluation.cartHardGateState).toBe(`HARD_GATE_${verdict === 'INDETERMINATE' ? 'INDETERMINATE' : verdict}`);
+    if (name === 'wrong requested quantity') expect(json.cartEvaluation.verifications.find((v: any) => v.constraintAttribute === 'cart_items').status).toBe('FAIL');
+    if (name.includes('unresolved')) {
+      expect(json.cartEvaluation.ambiguousStatedTotal).toBe(true);
+      expect(json.cartEvaluation.effectiveCartTotal).toBeNull();
+      await expect(page.getByText(/Stated total has ambiguous amount or unsupported currency/).first()).toBeVisible();
+    }
   }
   expect(calls).toBe(2);
   expect(pageErrors).toEqual([]);

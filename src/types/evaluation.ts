@@ -225,6 +225,7 @@ export interface CartEvaluationResult {
   effectiveCartTotal: number | null;
   isCartTotalComplete: boolean;
   totalDisagreement?: boolean;
+  ambiguousStatedTotal?: boolean;
   verifications: CartConstraintVerification[];
   cartHardGateState: HardGateState;
   hasCartFailure: boolean;

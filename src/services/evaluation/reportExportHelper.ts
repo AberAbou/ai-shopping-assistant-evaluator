@@ -377,7 +377,7 @@ export function buildExportMarkdownReport(params: ReportExportDataParams): strin
       `## 2B. SHOPPING CART EVALUATION`,
       `- **Cart Hard Gate:** ${finalEvaluationResult.cartEvaluation.cartHardGateState}`,
       `- **Calculated Cart Total:** ${finalEvaluationResult.cartEvaluation.calculatedCartTotal == null ? 'Unknown' : `$${finalEvaluationResult.cartEvaluation.calculatedCartTotal}`}`,
-      `- **Stated Cart Total:** ${finalEvaluationResult.cartEvaluation.statedCartTotal == null ? 'Not stated' : `$${finalEvaluationResult.cartEvaluation.statedCartTotal}`}`,
+      `- **Stated Cart Total:** ${finalEvaluationResult.cartEvaluation.ambiguousStatedTotal ? 'Ambiguous amount or unsupported currency (see evidence)' : finalEvaluationResult.cartEvaluation.statedCartTotal == null ? 'Not stated' : `$${finalEvaluationResult.cartEvaluation.statedCartTotal}`}`,
       `- **Effective Cart Total:** ${finalEvaluationResult.cartEvaluation.effectiveCartTotal == null ? 'Unknown' : `$${finalEvaluationResult.cartEvaluation.effectiveCartTotal}`}`,
       `- **Items:**`,
       ...finalEvaluationResult.cartEvaluation.cartItems.map(
@@ -715,7 +715,7 @@ function cartReportLines(result: FinalEvaluationResult): string[] {
   if (!cart?.hasCartEvaluation) return [];
   const amount = (value: number | null) => value === null ? 'Unknown' : `$${value}`;
   return ['SHOPPING CART EVALUATION', `Cart assessment: ${cart.cartHardGateState.replace('HARD_GATE_', '')}`,
-    `Calculated total: ${amount(cart.calculatedCartTotal)}; Stated total: ${cart.statedCartTotal === null ? 'Not stated' : amount(cart.statedCartTotal)}; Effective total: ${amount(cart.effectiveCartTotal)}`,
+    `Calculated total: ${amount(cart.calculatedCartTotal)}; Stated total: ${cart.ambiguousStatedTotal ? 'Ambiguous amount or unsupported currency (see evidence)' : cart.statedCartTotal === null ? 'Not stated' : amount(cart.statedCartTotal)}; Effective total: ${amount(cart.effectiveCartTotal)}`,
     ...cart.cartItems.map(i => `${i.quantity ?? 'Unknown'}x ${i.productName}: unit price ${amount(i.unitPrice)}, line total ${amount(i.lineTotal)}`),
     ...cart.verifications.map(v => `${v.constraintEvidence} — ${v.status}: ${v.reason}`), cart.rationale, ''];
 }

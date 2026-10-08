@@ -380,7 +380,9 @@ export const FinalEvaluationView: React.FC<FinalEvaluationViewProps> = ({
                   : 'Unknown'}
               </div>
               <span className="text-[10px] text-slate-500 block">
-                {finalEvaluationResult.cartEvaluation.statedCartTotal !== null
+                {finalEvaluationResult.cartEvaluation.ambiguousStatedTotal
+                  ? 'Stated Total: Ambiguous amount or unsupported currency'
+                  : finalEvaluationResult.cartEvaluation.statedCartTotal !== null
                   ? `Stated Total: $${finalEvaluationResult.cartEvaluation.statedCartTotal}`
                   : 'Evaluated Total'}
               </span>
