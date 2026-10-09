@@ -139,7 +139,10 @@ export function verifyProductConstraintsDeterministically(
         const isNegative = constraint.polarity === 'negative';
 
         // CASE A: PRICE CONSTRAINTS
-        if (attr === 'price' || attr === 'budget') {
+        if (attr === 'conversation_issue') {
+          status = 'UNKNOWN';
+          reason = `Conversation clarification is required: ${constraint.reasoning ?? constraint.sourceText}`;
+        } else if (attr === 'price' || attr === 'budget') {
           method = 'deterministic';
           if (product.price && product.price.amount !== null) {
             const statedPrice = product.price.amount;

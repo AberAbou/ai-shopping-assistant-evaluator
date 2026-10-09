@@ -2,16 +2,28 @@
  * Core type definitions for the AI Shopping Assistant Evaluator.
  * 
  * CRITICAL PRODUCT REQUIREMENT:
- * The evaluator provides ONLY two inputs:
+ * The default single-prompt workflow provides two inputs:
  * 1. userPrompt
  * 2. llmOutput
  * 
- * All other types represent internal representations and automated outputs.
+ * Conversation mode preserves ordered pairs of those inputs and their provenance.
+ * Other types represent internal representations and automated outputs.
  */
 
 export interface EvaluatorInput {
   userPrompt: string;
   llmOutput: string;
+  conversation?: ConversationContext;
+}
+
+export interface ConversationTurn { id: string; userPrompt: string; llmOutput: string }
+export interface ConversationChange { turnId: string; action: string; sourceText: string }
+export interface ConversationContext {
+  turns: ConversationTurn[];
+  evaluatedTurnId: string;
+  responsePolicy: 'complete_snapshot';
+  changes: ConversationChange[];
+  unresolved: Array<{ turnId: string; sourceText: string; reason: string }>;
 }
 
 // ============================================================================
@@ -46,6 +58,7 @@ export type ConstraintOperator =
  */
 export interface AtomicConstraint {
   id: string;
+  sourceTurnId?: string;
   attribute: string; // e.g. "price", "category", "weight", "breathability", "material", "color", "size", "cart_total_price"
   operator: ConstraintOperator;
   expectedValue: string | number | boolean;
@@ -234,6 +247,7 @@ export interface CartEvaluationResult {
 
 export interface ExtractedClaim {
   id: string; // "CL1", "CL2", etc.
+  sourceTurnId?: string;
   productId: string | null; // "P1", "P2", or null for response-level claims
   productName?: string | null; // Name of linked product
   claimType: ClaimCategory;
