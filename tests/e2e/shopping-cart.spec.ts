@@ -16,6 +16,15 @@ const cases: Array<[string, string, string, string, boolean]> = [
   ['review: ranged total is unresolved', request, valid.replace('Total: $80.', 'Total: $80 or $90.'), 'INDETERMINATE', true],
   ['review: unit-price request does not create budgets', '2 shirts at $20 each and 1 pair of shorts for $40 each; total budget under $85', valid, 'PASS', true],
   ['review: adjacent item and cart budgets', '2 shirts under $25 each; total budget under $85; 1 pair of shorts under $45 each', valid, 'PASS', true],
+  ['third review: color choices preserve combined budget', 'Buy 2 shirts and 1 pair of shorts, either red or blue; total budget under $85', invalid, 'FAIL', true],
+  ['third review: color choice before the second item', 'Buy 2 shirts in red or blue and 1 pair of shorts; total budget under $85', invalid, 'FAIL', true],
+  ['third review: optional feature clause preserves combined budget', 'Buy 2 shirts and shorts; if possible make them breathable; total budget under $85', invalid, 'FAIL', true],
+  ['third review: inclusive qualifier total unresolved', request, valid.replace('Total: $80.', 'Total: $80, including all items.'), 'INDETERMINATE', true],
+  ['third review: tax qualifier total unresolved', request, valid.replace('Total: $80.', 'Total: $80 (before tax).'), 'INDETERMINATE', true],
+  ['third review: currency-free budget', 'Buy 2 shirts and 1 pair of shorts; max 85', valid, 'INDETERMINATE', true],
+  ['third review: budget before items', 'budget under $85 for 2 shirts and shorts', invalid, 'FAIL', true],
+  ['third review: API EUR currency', 'a jacket under $100', 'I recommend Trail Jacket for €90.', 'INDETERMINATE', false],
+  ['third review: API USD label conflicts with EUR source', 'a jacket under $100', 'I recommend Trail Jacket for €90.', 'INDETERMINATE', false],
   ['unknown quantities', request, valid.replace('2 running', 'running').replace('1 pair of ', ''), 'INDETERMINATE', true],
   ['alternatives', 'a jacket under $100', 'Two options: Trail Jacket ($60) is waterproof. Rain Jacket ($70) is waterproof.', 'PASS', false],
   ['leather exclusion failure', 'running shoes without leather under $120', 'I recommend genuine leather running shoes for $99.', 'FAIL', false],
@@ -35,6 +44,10 @@ for (const [name, input, output, verdict, cart] of cases) test(name, async ({ pa
     calls++;
     // Emulate old API payloads without the new metadata; the client must reconcile them.
     const payload = route.request().url().includes('analyze-prompt') ? prompt(input) : claims(output);
+    if ('products' in payload && name.startsWith('third review: API')) {
+      payload.products[0].name = 'Trail Jacket';
+      payload.products[0].price = {amount:90, currency:name.includes('USD label') ? 'USD' : 'EUR', sourceText:output};
+    }
     if ('products' in payload) payload.products.forEach(p => { delete p.parsedQuantity; delete p.unitPrice; delete p.lineTotal; });
     else payload.constraints.forEach(c => { delete c.scope; delete c.targetProductCategory; });
     await route.fulfill({ status:200, contentType:'application/json', body:JSON.stringify(payload) });

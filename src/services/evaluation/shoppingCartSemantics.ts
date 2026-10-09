@@ -56,7 +56,14 @@ export function cartRequest(text: string): { isCart: boolean; items: RequestedCa
     joinedRequest ||= clauseItems.length > 1 && /\band\b|\bplus\b|,/i.test(clause);
     for (const item of clauseItems) if (!items.some(i => i.category === item.category)) items.push(item);
   }
-  const alternatives = /\b(?:either|alternatives?|options?|choose one|one of|otherwise|instead|unless)\b|\bif\b(?!\s+possible)|\bor\b(?!\s+(?:less|more|equal))/i.test(text);
+  // Choices of attributes (red or blue) and optional feature clauses must not
+  // veto an explicit basket. A choice marker must actually involve items.
+  const alternatives = [...text.matchAll(/\bor\b(?!\s+(?:less|more|equal))/gi)].some(m => {
+    const left = text.slice(0, m.index).split(/[;,\n]|\.(?=\s)/).at(-1) ?? '';
+    const right = text.slice(m.index! + m[0].length).split(/[;,\n]|\.(?=\s)|\band\b/i)[0];
+    return productCategory(left) !== null && productCategory(right) !== null;
+  }) || [...text.matchAll(/\b(?:alternatives?|options?|choose one|one of|otherwise|instead|unless|if(?!\s+possible))\b/gi)].some(m =>
+    productCategory(text.slice(m.index! + m[0].length).split(/[;\n]|\.(?=\s)/)[0]) !== null);
   const combined = /\b(?:total budget|overall budget|combined budget|total cost|cart budget|shopping cart|in total|all together|for both|for all|all items|entire order)\b/i.test(text);
   const isCart = !alternatives && items.length > 0 && (combined || items.some(i => (i.quantity ?? 0) > 1 || i.hasInvalidQuantity) || joinedRequest);
   return { isCart, items };
@@ -75,30 +82,43 @@ export function appliesToProduct(c: AtomicConstraint, product: ExtractedProduct)
 export function shoppingConstraints(text: string): AtomicConstraint[] {
   const request = cartRequest(text);
   const constraints: AtomicConstraint[] = [];
-  const money = /(?:(strictly\s+under|under|below|less\s+than|at\s+most|up\s+to|no\s+more\s+than|at\s+least|over|above|greater\s+than|exactly|around|approximately|about|max(?:imum)?\s+(?:of\s+)?|budget\s+(?:(?:is|of)\s+)?)\s*)([$€£]?)([0-9]+(?:\.[0-9]+)?)(?:\s*(USD|dollars|EUR|GBP|CAD|AUD))?/gi;
+  const money = /(?:(strictly\s+under|under|below|less\s+than|at\s+most|up\s+to|no\s+more\s+than|at\s+least|over|above|greater\s+than|exactly|around|approximately|about|max(?:imum)?\s+(?:of\s+)?|budget\s+(?:(?:is|of)\s+)?)\s*)(\p{Sc}?)([0-9]+(?:\.[0-9]+)?)(?:\s*(USD|dollars|EUR|GBP|CAD|AUD|JPY|INR|CNY|CHF|NZD))?/giu;
   const moneyMatches = [...text.matchAll(money)];
+  const coveredMoneyPositions: number[] = [];
   for (const match of moneyMatches) {
     const before = text.slice(0, match.index);
     const clauseStart = Math.max(before.lastIndexOf(','), before.lastIndexOf(';'), before.lastIndexOf('\n'), before.lastIndexOf(' and '), before.lastIndexOf('. ')) + 1;
     const end = (match.index ?? 0) + match[0].length;
     const tail = text.slice(end);
+    // Numeric measurements are not monetary limits, even after 'max'/'under'.
+    if (!match[2] && !match[4] && /^\s*(?:dB|kg|g|oz|cm|mm|inches|hours?|minutes?|watts?|percent|%)(?:\b|$)/i.test(tail)) continue;
     const nextClause = tail.search(/[,;\n]|\band\b|\.(?=\s|$)/i);
     const local = text.slice(clauseStart, end) + tail.slice(0, nextClause < 0 ? tail.length : nextClause);
     const localCategory = productCategory(local);
     const perItem = /\b(?:each|apiece|per item|per product)\b/i.test(local);
-    const total = /\b(?:total|combined|overall|cart|together|all items|both)\b/i.test(local);
+    const prefix = text.slice(clauseStart, match.index);
+    const followingItems = tail.split(/[;\n]|\.(?=\s|$)/)[0];
+    const beforeItemGroup = !productCategory(prefix) && /\bfor\b/i.test(followingItems) && categoryPatterns.filter(c => c.pattern.test(followingItems)).length > 1;
+    const total = beforeItemGroup || /\b(?:total|combined|overall|cart|together|all items|both)\b/i.test(local);
     const scope = request.isCart && !perItem && (total || !localCategory) ? 'cart' : 'product';
     const word = match[1].toLowerCase().replace(/\s+/g, ' ');
-    const foreignCurrency = /[€£]/.test(match[2]) || Boolean(match[4] && !/^(USD|dollars)$/i.test(match[4]));
-    const operator = foreignCurrency || /around|approximately|about/.test(word) ? 'required' : /under|below|less than/.test(word) ? '<' : /at least/.test(word) ? '>=' : /over|above|greater/.test(word) ? '>' : /exactly/.test(word) ? 'equals' : '<=';
-    constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator, expectedValue: foreignCurrency ? 'Unsupported budget currency' : Number(match[3]), scope,
+    const foreignCurrency = Boolean(match[2] && match[2] !== '$') || Boolean(match[4] && !/^(USD|dollars)$/i.test(match[4]));
+    const missingCurrency = !match[2] && !match[4];
+    const operator = foreignCurrency || missingCurrency || /around|approximately|about/.test(word) ? 'required' : /under|below|less than/.test(word) ? '<' : /at least/.test(word) ? '>=' : /over|above|greater/.test(word) ? '>' : /exactly/.test(word) ? 'equals' : '<=';
+    constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator, expectedValue: foreignCurrency ? 'Unsupported budget currency' : missingCurrency ? 'Unresolved budget currency' : Number(match[3]), scope,
       targetProductCategory: scope === 'product' && request.isCart ? localCategory : null,
       constraintType: /\b(?:preferably|ideally|if possible|prefer)\b/i.test(local) ? 'soft' : 'hard', polarity: 'positive', sourceText: match[0], confidence: 0.99 });
+    coveredMoneyPositions.push(match.index!);
+  }
+  // A known per-item cap elsewhere must not hide an unresolved hard budget.
+  for (const clause of text.matchAll(/(?:[^.;\n]|\.(?!\s|$))+/g)) {
+    if (!/\bbudget\b/i.test(clause[0]) || coveredMoneyPositions.some(index => index >= clause.index! && index < clause.index! + clause[0].length)) continue;
+    const scope = request.isCart ? 'cart' : 'product';
+    constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator: 'required', expectedValue: 'Unresolved budget', scope,
+      targetProductCategory: scope === 'product' ? productCategory(clause[0]) : null,
+      constraintType: /preferably|ideally|if possible/i.test(clause[0]) ? 'soft' : 'hard', polarity: 'positive', sourceText: clause[0].trim(), confidence: 0.9 });
   }
   if (request.isCart) {
-    if (!constraints.some(c => c.attribute.includes('price')) && /\bbudget\b|(?:under|below|up to)\s*[€£]/i.test(text)) {
-      constraints.push({ id: '', attribute: 'cart_total_price', operator: 'required', expectedValue: 'Unresolved budget', scope: 'cart', constraintType: /preferably|ideally|if possible/i.test(text) ? 'soft' : 'hard', polarity: 'positive', sourceText: text, confidence: 0.9 });
-    }
     constraints.push({ id: '', attribute: 'cart_items', operator: 'required', expectedValue: JSON.stringify(request.items), scope: 'cart', constraintType: 'hard', polarity: 'positive', sourceText: text, confidence: 0.98 });
     for (const item of request.items) {
       if (item.quantity !== null) constraints.push({ id: '', attribute: 'quantity', operator: 'equals', expectedValue: item.quantity, scope: 'cart', targetProductCategory: item.category, constraintType: 'hard', polarity: 'positive', sourceText: item.sourceText, confidence: 0.98 });
@@ -120,7 +140,7 @@ export function reconcilePromptCart(result: UserPromptAnalysisResult, text: stri
   const budget = canonical.find(c => c.attribute === 'cart_total_price') ?? canonical.find(c => c.attribute === 'price');
   const intent = { ...result.intent, quantity: cart.items.length === 1 ? cart.items[0].quantity : result.intent.quantity,
     budget: budget ? { maxAmount: ['<', '<=', 'equals'].includes(budget.operator) ? Number(budget.expectedValue) : null,
-      minAmount: ['>', '>=', 'equals'].includes(budget.operator) ? Number(budget.expectedValue) : null, currency: 'USD', sourceText: budget.sourceText } : result.intent.budget,
+      minAmount: ['>', '>=', 'equals'].includes(budget.operator) ? Number(budget.expectedValue) : null, currency: typeof budget.expectedValue === 'number' ? 'USD' : 'Unknown', sourceText: budget.sourceText } : result.intent.budget,
     evidenceMap: { ...result.intent.evidenceMap, ...(budget ? { budget: budget.sourceText } : {}) } };
   return { ...result, constraints, summary, intent, rawJson: { ...result.rawJson, constraints, intent } };
 }

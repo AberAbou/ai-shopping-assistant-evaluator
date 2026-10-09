@@ -21,5 +21,6 @@ for (const suite of ['scripts/test_checkpoint14b2a_price_boundaries.mjs', 'scrip
 }
 run('scripts/test_checkpoint14c1_shopping_cart.ts', [tsx, '--test', 'scripts/test_checkpoint14c1_shopping_cart.ts']);
 run('scripts/test_checkpoint14c1_review.ts', [tsx, '--test', 'scripts/test_checkpoint14c1_review.ts']);
-console.log(`All-suite runner: ${11 - failures}/11 commands passed, ${failures} failed.`);
+run('scripts/test_checkpoint14c1_third_review.ts', [tsx, '--test', 'scripts/test_checkpoint14c1_third_review.ts']);
+console.log(`All-suite runner: ${12 - failures}/12 commands passed, ${failures} failed.`);
 process.exitCode = failures ? 1 : 0;

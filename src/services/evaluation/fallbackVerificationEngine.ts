@@ -146,7 +146,13 @@ export function verifyProductConstraintsDeterministically(
             const maxAllowed = typeof expectedVal === 'number' ? expectedVal : parseFloat(String(expectedVal));
             claimEvidence = product.price.sourceText ? [product.price.sourceText] : [`$${statedPrice}`];
 
-            if (!isNaN(maxAllowed)) {
+            if (product.price.currency !== 'USD') {
+              status = 'UNKNOWN';
+              reason = `The stated product currency '${product.price.currency || 'Unknown'}' cannot be compared with a USD price requirement without currency conversion.`;
+            } else if (product.unitPrice === null) {
+              status = 'UNKNOWN';
+              reason = 'The product evidence does not establish an unambiguous USD unit price; price compliance remains UNKNOWN.';
+            } else if (!isNaN(maxAllowed)) {
               const comparison: Record<string, { matches: boolean; boundary: string }> = {
                 '<': { matches: statedPrice < maxAllowed, boundary: 'strictly below' },
                 less_than: { matches: statedPrice < maxAllowed, boundary: 'strictly below' },
