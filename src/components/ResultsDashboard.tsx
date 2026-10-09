@@ -55,8 +55,10 @@ import {
 } from '../types/evaluation';
 import { FinalEvaluationView } from './FinalEvaluationView';
 import { ReportExportView } from './ReportExportView';
+import type { ReportExportDataParams } from '../services/evaluation/reportExportHelper';
 
 interface ResultsDashboardProps {
+  conversationAssessments?: ReportExportDataParams[];
   inputs: EvaluatorInput;
   promptAnalysis: UserPromptAnalysisResult | null;
   claimAnalysis: LlmOutputClaimAnalysisResult | null;
@@ -82,6 +84,7 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
   recommendationResult,
   finalEvaluationResult,
   isInputsModified = false,
+  conversationAssessments,
 }) => {
   const [activeTab, setActiveTab] = useState<ResultTab>('overview');
   const [copiedJson, setCopiedJson] = useState(false);
@@ -2680,6 +2683,8 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({
         {/* ========================================================================= */}
         {activeTab === 'report_export' && (
           <ReportExportView
+            conversationAssessments={conversationAssessments}
+            isInputsModified={isInputsModified}
             inputs={inputs}
             promptAnalysis={promptAnalysis}
             claimAnalysis={claimAnalysis}

@@ -1,4 +1,4 @@
-import { reconcileClaimCart, extractQuantity, productCategory } from './shoppingCartSemantics';
+import { reconcileClaimCart, extractQuantity, productCategory, cartSnapshotIntro } from './shoppingCartSemantics';
 import {
   ExtractedProduct,
   ExtractedClaim,
@@ -129,7 +129,7 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
 
   // Pattern 2b: Multi-item prose recommendations with prices (e.g. "2 running shirts at $25 each and 1 pair of running shorts at $40" or "a shirt for $25 and shorts for $40")
   if (detectedCandidates.length === 0) {
-    const multiItemProseRegex = /(?:(?:^|and|,|:|\n)\s*)(?:(?:I\s+recommend|recommend|suggest|get|try|check\s+out)\s+)?((?:(?:[0-9]+|\b(?:one|two|three|four|a|an)\b|\b[0-9]+\s+pairs?\s+of\b|\b[0-9]+\s+units?\b)\s+)?(?:[A-Za-z0-9'®™-]+\s+){0,5}[A-Za-z0-9'®™-]+?)\s+(?:at|for|costing|priced\s+at)\s+\$([0-9]+(?:\.[0-9]{2})?)(?:\s+(?:each|apiece))?/gi;
+    const multiItemProseRegex = new RegExp(String.raw`(?:(?:^|and|,|:|\n)\s*)(?:(?:I\s+recommend|recommend|suggest|get|try|check\s+out|${cartSnapshotIntro})\s+)?((?:(?:[0-9]+|\b(?:one|two|three|four|a|an)\b|\b[0-9]+\s+pairs?\s+of\b|\b[0-9]+\s+units?\b)\s+)?(?:[A-Za-z0-9'®™-]+\s+){0,5}[A-Za-z0-9'®™-]+?)\s+(?:at|for|costing|priced\s+at)\s+\$([0-9]+(?:\.[0-9]{2})?)(?:\s+(?:each|apiece))?`,'gi');
     const proseMatches = Array.from(text.matchAll(multiItemProseRegex));
 
     // Filter out matches that are actually cart totals (e.g. "all items for $90" or "totaling $65")
@@ -185,7 +185,7 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
       const idx = text.indexOf(snippet, cursor);
       cursor = Math.max(cursor, idx + snippet.length);
       const quantity = extractQuantity(snippet);
-      const item = snippet.match(/^(?:I\s+(?:recommend|suggest)\s+)?(?:-?\d+(?:\.\d+)?|one|two|three|four|five|six|a|an)\s+(?:pair\s+of\s+)?([a-z0-9 '-]*?\b(?:shirts?|shorts?|shoes?|jackets?|socks?|pants?|sunscreen|backpacks?|headphones?|laptops?|watches?))\b/i);
+      const item = snippet.replace(new RegExp(`^${cartSnapshotIntro}\\s+`,'i'),'').match(/^(?:I\s+(?:recommend|suggest)\s+)?(?:-?\d+(?:\.\d+)?|one|two|three|four|five|six|a|an)\s+(?:pair\s+of\s+)?([a-z0-9 '-]*?\b(?:shirts?|shorts?|shoes?|jackets?|socks?|pants?|sunscreen|backpacks?|headphones?|laptops?|watches?))\b/i);
       if (item && productCategory(item[1]) && quantity.raw !== null) detectedCandidates.push({ name: item[1], startIndex: idx, endIndex: idx + item[0].length, rawSnippet: snippet, detectedQuantity: quantity.raw, parsedQuantity: quantity.amount });
     }
   }

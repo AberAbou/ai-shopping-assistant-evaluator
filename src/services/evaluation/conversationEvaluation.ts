@@ -17,6 +17,7 @@ type Issue = ConversationContext['unresolved'][number];
 interface State {
   items: Item[]; requirements: AtomicConstraint[]; cart: boolean;
   changes: ConversationChange[]; unresolved: Issue[];
+  cartOrigin?: {turnId:string;sourceText:string};
   suspended?: { items: Item[]; requirements: AtomicConstraint[]; issueTurnId: string };
 }
 export interface ConversationEvaluation extends ReportExportDataParams { inputs: { userPrompt: string; llmOutput: string; conversation: ConversationContext } }
@@ -49,16 +50,47 @@ function currentOptionChoice(text: string): { label: string | null; issue: strin
 
 function revise(state: State, turn: ConversationTurn, first: boolean): UserPromptAnalysisResult {
   const text = turn.userPrompt;
+  const replacement = text.match(/\breplace\s+([^.;\n]+?)\s+with\s+(.+?)(?:[.;]|$)/i);
   const previousItems=state.items;
   const wasCart=state.cart;
-  const analysis = analyzePrompt(text);
+  // Extract requirements from the replacement, not the old item's description.
+  const replacementPrefix = replacement?.[0].match(/^replace\s+.+?\s+with\s+/i)?.[0];
+  const analysisText = replacementPrefix ? text.slice(0,replacement!.index) + text.slice(replacement!.index! + replacementPrefix.length) : text;
+  const analysis = analyzePrompt(analysisText);
   const request = cartRequest(text);
-  const record = (action: string) => state.changes.push({ turnId: turn.id, action, sourceText: text });
+  const record = (action: string) => {
+    if(!state.changes.some(c=>c.turnId===turn.id&&c.action===action&&c.sourceText===text)) state.changes.push({ turnId: turn.id, action, sourceText: text });
+    if(['item addition','quantity revision','replacement','removal'].includes(action)) state.cartOrigin={turnId:turn.id,sourceText:text};
+  };
   const issue = (reason: string) => { state.unresolved.push({turnId:turn.id,sourceText:text,reason}); record('unresolved'); };
+  const overrides=[...text.matchAll(/\b(?:change|set|update|increase|decrease)\s+(.+?)\s+to\s+(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi)].map(m=>{
+    const categories=categoryPatterns.filter(c=>c.pattern.test(m[1]));
+    const range=text.slice(m.index!+m[0].length).match(/^\s*(?:[-–]|to\b|or\b)\s*(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\b/i);
+    const quantity=range?null:parseQuantity(m[2]);
+    return {category:categories.length===1?categories[0].category:null,quantity,sourceText:m[0]+(range?.[0]??''),hasInvalidQuantity:quantity===null};
+  });
+  for(const item of overrides) if(item.category) {
+    const index=request.items.findIndex(i=>i.category===item.category);
+    if(index<0) request.items.push({...item,category:item.category});
+    else request.items[index]={...item,category:item.category};
+  }
+  const confirmationWords = /\b(?:confirm|restate|summari[sz]e|show|review|check)\b/i.test(text);
+  const cartKeywords = /\b(?:cart|order|quantities|prices|total|items)\b/i.test(text);
+  const confirmationOnly = /^(?:please\s+)?(?:confirm|restate|summari[sz]e|show)\s+(?:(?:the|my|our)\s+)?(?:(?:final|current|same)\s+)?(?:shopping\s+)?cart(?:\s*[,;:]?\s*(?:and\s+)?(?:quantities|(?:individual|unit)\s+prices|prices|(?:grand\s+)?total))*[.!?\s]*$/i.test(text)
+    || (confirmationWords && cartKeywords && !/\b(?:replace|remove|drop|add\b|increase\b|decrease\b|instead\b)\b/i.test(text)
+        && overrides.length === 0
+        && !/[\d$€£]/i.test(text.replace(/\b(?:quantities|prices|total|unit prices|individual prices)\b/gi, '')));
+  const retentionPattern = /^(?:please\s+)?keep\s+(?:the\s+)?same\s+(?:products?|items?|cart|quantities)(?:\s+and\s+(?:products?|items?|quantities))*[.!\s]*$/i;
+  const retentionAllPattern = /\bkeep\s+(?:all\s+(?:my\s+)?(?:latest\s+)?requirements|everything|the\s+same\s+cart)\s+unchanged\b/i;
+  const retainedCategory = (clause:string) => state.items.some(item=>{
+    const category=categoryPatterns.find(c=>c.category===item.category)!;
+    return new RegExp(`^(?:please\\s+)?keep\\s+(?:the\\s+)?(?:same\\s+)?(?:running\\s+)?${category.pattern.source}(?:\\s+and\\s+(?:the\\s+)?original\\s+per-product\\s+budget\\s+unchanged)?[.!\\s]*$`,'i').test(clause);
+  });
+  const retentionOnly = retentionPattern.test(text) || retentionAllPattern.test(text);
   const clarification = /\b(?:I mean|I meant|to clarify)\b/i.test(text);
   const withdrawal=text.match(/\b(?:allow|no longer require|remove requirement for)\s+(leather|fragrance|waterproof|breathable|running|hiking)\b/i);
   const operation=/\b(?:replace\s+.+\s+with|remove|drop|no longer need|add)\b/i.test(text);
-  const recognized = request.items.some(i=>i.quantity!==null||i.hasInvalidQuantity) || analysis.constraints.length > 0 || Boolean(withdrawal) || operation;
+  const recognized = request.items.some(i=>i.quantity!==null||i.hasInvalidQuantity) || analysis.constraints.length > 0 || Boolean(withdrawal) || operation || confirmationOnly || retentionOnly || overrides.length>0;
   if (clarification && recognized && state.suspended) {
     state.items = state.suspended.items;
     state.requirements = state.suspended.requirements;
@@ -67,7 +99,7 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
     record('clarification');
   }
   // A referential update without a named target is not a deterministic revision.
-  const ambiguous = !first && /\b(?:it|them|that|those)\b/i.test(text) && !request.items.length && !/\b(?:all items|both products|total|cart|budget)\b/i.test(text);
+  const ambiguous = !first && ((/\b(?:it|them|that|those)\b/i.test(text) && !request.items.length && !/\b(?:all items|both products|total|cart|budget)\b/i.test(text)) || overrides.some(i=>!i.category||!state.items.some(old=>old.category===i.category)));
   const unsupported = !first && !recognized && !/^(?:yes|okay|ok|thanks|thank you|continue)[.!\s]*$/i.test(text) && !/\bchoose\s+option\s+[a-z0-9]+\b/i.test(text);
   if (ambiguous || unsupported) {
     if (!state.suspended) state.suspended = {items:state.items.map(i=>({...i})),requirements:state.requirements.map(c=>({...c})),issueTurnId:turn.id};
@@ -86,7 +118,6 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       record('requirement withdrawal');
     }
     if (currentOptionChoice(text).label) record('select option');
-    const replacement = text.match(/\breplace\s+(.+?)\s+with\s+(.+?)(?:[.;]|$)/i);
     const removal = text.match(/\b(?:remove|drop|no longer need)\s+(.+?)(?:[.;]|$)/i);
     const targetText=replacement?.[1] ?? removal?.[1] ?? '';
     const targetCategory=productCategory(targetText);
@@ -101,7 +132,7 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
     }
     if (removeCategory) {
       state.items = state.items.filter(i=>i.category!==removeCategory);
-      state.requirements = state.requirements.filter(c=>c.targetProductCategory!==removeCategory);
+      if(!replacement || productCategory(replacement[2])!==removeCategory) state.requirements = state.requirements.filter(c=>c.targetProductCategory!==removeCategory);
       record(replacement?'replacement':'removal');
     }
     const incoming = replacement ? (removeCategory ? cartRequest(replacement[2]).items : []) : request.items.filter(i=>i.category!==targetCategory);
@@ -112,9 +143,10 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       const pattern = categoryPatterns.find(p=>p.category===item.category)!.pattern;
       const counts = [...text.matchAll(new RegExp(pattern.source,'gi'))].flatMap(m=> {
         const prefix=text.slice(Math.max(0,m.index!-55),m.index);
-        const q=prefix.match(/(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s+(?:pair\s+of\s+)?(?:[a-z-]+\s+){0,2}$/i);
+        const q=prefix.match(/(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s+(?:pair\s+of\s+)?(?:(?!and\b|or\b|plus\b|with\b)[a-z-]+,?\s+){0,4}$/i);
         return q ? [parseQuantity(q[1]) ?? q[1].toLowerCase()] : [];
       });
+      counts.push(...overrides.filter(i=>i.category===item.category).map(i=>i.quantity??'invalid'));
       const conflicting = new Set(counts).size > 1;
       if (conflicting) issue(`Conflicting requested quantities for ${item.category}.`);
       else if(item.quantity!==null) state.unresolved=state.unresolved.filter(i=>i.reason!==`Conflicting requested quantities for ${item.category}.`);
@@ -135,6 +167,13 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
     for (const raw of analysis.constraints.filter(c=>!['quantity','cart_items'].includes(c.attribute))) {
       const c:AtomicConstraint={...raw,sourceTurnId:turn.id};
       const local=requirementClause(text,c.sourceText);
+      // Category descriptors in a count update or retention/confirmation clause
+      // refer to existing products; they do not revise their suitability.
+      const referenceClause=local.trim().replace(/[.!]$/,'');
+      if(confirmationOnly || retentionOnly || retentionPattern.test(referenceClause) || retentionAllPattern.test(referenceClause)
+        || (!first&&state.requirements.some(old=>budgetAttributes.includes(old.attribute))&&budgetAttributes.includes(c.attribute)&&/\b(?:keep|retain|leave)\b/i.test(local)&&/\b(?:original|same|unchanged)\b/i.test(local)&&!/[\d$€£]|\b(?:under|over|below|above|at most|at least)\b/i.test(local))
+        || (c.expectedValue === 'Unresolved budget' && /\b(?:unchanged|same|as\s+before|keep|retain|leave)\b/i.test(text))
+        || (c.attribute==='use_case'&&(retainedCategory(referenceClause)||overrides.some(i=>i.sourceText.toLowerCase()===referenceClause.toLowerCase())))) continue;
       if(withdrawal && String(c.expectedValue).toLowerCase().includes(withdrawal[1].toLowerCase())) continue;
       if (!first && budgetAttributes.includes(c.attribute) && !c.targetProductCategory && /\b(?:total|cart|overall|combined|budget)\b/i.test(local) && !/\b(?:each|per item|per product)\b/i.test(local) && state.cart) {
         c.attribute='cart_total_price';c.scope='cart';c.targetProductCategory=null;
@@ -146,6 +185,15 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       // A new optional preference never silently withdraws a mandatory limit.
       // An explicit "replace"/"instead" may deliberately change its strength.
       const explicitReplacement=/\b(?:instead|replace|no longer mandatory)\b/i.test(text);
+      if(replacement && removeCategory && c.targetProductCategory && c.attribute!=='price' && c.scope!=='cart') {
+        // Explicit replacement requirements supersede the same property, including
+        // opposite polarity; retain global requirements for the other products.
+        state.requirements=state.requirements.flatMap(old=>{
+          if(old.sourceTurnId===turn.id || old.attribute!==c.attribute || (old.targetProductCategory && old.targetProductCategory!==c.targetProductCategory)) return [old];
+          if(!old.targetProductCategory && state.items.some(i=>i.category!==c.targetProductCategory)) return state.items.filter(i=>i.category!==c.targetProductCategory).map(i=>({...old,targetProductCategory:i.category}));
+          return [];
+        });
+      }
       state.requirements=state.requirements.filter(old=>old.sourceTurnId===turn.id || key(old)!==key(c) || (!explicitReplacement && old.constraintType!==c.constraintType));
       state.requirements.push(c);
       record(matches.length?'requirement revision':'requirement addition');
@@ -156,7 +204,7 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
   const active=state.requirements.map(c=>({...c}));
   if(state.cart){
     if(!state.items.length) issue('The cart has no active items; provide a new shopping request before evaluating a response.');
-    active.push({id:'',attribute:'cart_items',operator:'required',expectedValue:JSON.stringify(state.items),scope:'cart',constraintType:'hard',polarity:'positive',sourceText:userText,sourceTurnId:turn.id,confidence:1});
+    active.push({id:'',attribute:'cart_items',operator:'required',expectedValue:JSON.stringify(state.items),scope:'cart',constraintType:'hard',polarity:'positive',sourceText:state.cartOrigin?.sourceText??userText,sourceTurnId:state.cartOrigin?.turnId??turn.id,confidence:1});
     for(const item of state.items) if(item.quantity!==null) active.push({id:'',attribute:'quantity',operator:'equals',expectedValue:item.quantity,scope:'cart',targetProductCategory:item.category,constraintType:'hard',polarity:'positive',sourceText:item.sourceText,sourceTurnId:item.sourceTurnId,confidence:1});
   }
   for(const pending of state.unresolved) active.push({id:'',attribute:'conversation_issue',operator:'required',expectedValue:'clarification',scope:'product',constraintType:'hard',polarity:'positive',sourceText:pending.sourceText,sourceTurnId:pending.turnId,reasoning:pending.reason,confidence:1});

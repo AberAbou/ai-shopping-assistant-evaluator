@@ -27,10 +27,12 @@ export function parseQuantity(raw: unknown): number | null {
   return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : null;
 }
 
+export const cartSnapshotIntro = '(?:(?:your|the|this)\\s+)?(?:(?:final|current)\\s+)?(?:shopping\\s+)?cart\\s+(?:contains|includes|has|consists\\s+of)';
+
 export function extractQuantity(text: string): { raw: string | null; amount: number | null } {
   text = text.trim();
   const explicit = text.match(/\b(?:qty|quantity)\s*[:=]?\s*([\w.-]+)/i);
-  const prefix = text.replace(/^\s*(?:\d+[.)]\s+|[-*]\s+)/, '').match(/^(?:I\s+(?:recommend|suggest)\s+|(?:get|buy|recommend|suggest)\s+)?(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s*(?:x\s+|\s+(?:pairs?\s+of\s+)?)(?=[a-z])/i);
+  const prefix = text.replace(/^\s*(?:\d+[.)]\s+|[-*]\s+)/, '').replace(new RegExp(`^${cartSnapshotIntro}\\s+`,'i'),'').match(/^(?:I\s+(?:recommend|suggest)\s+|(?:get|buy|recommend|suggest)\s+)?(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s*(?:x\s+|\s+(?:pairs?\s+of\s+)?)(?=[a-z])/i);
   const suffix = text.match(/\b(?:x\s*|quantity\s*)(-?\d+(?:\.\d+)?)(?:\s|$)/i);
   const raw = explicit?.[1] ?? prefix?.[1] ?? suffix?.[1] ?? null;
   return { raw, amount: parseQuantity(raw) };
@@ -50,12 +52,38 @@ export function cartRequest(text: string): { isCart: boolean; items: RequestedCa
     for (const entry of categoryPatterns) {
       const match = clause.match(entry.pattern);
       if (!match) continue;
-      const before = clause.slice(Math.max(0, (match.index ?? 0) - 55), match.index);
-      const qty = before.match(/(-?\d+(?:\.\d+)?|one|two|three|four|five|six|a|an)\s+(?:pairs?\s+of\s+)?(?:[a-z-]+\s+){0,2}$/i);
+      const matchIndex = match.index ?? 0;
+      // Only examine text between any preceding category in this clause and this match
+      let relevantBefore = clause.slice(0, matchIndex);
+      for (const other of categoryPatterns) {
+        if (other.category === entry.category) continue;
+        const otherMatches = [...clause.slice(0, matchIndex).matchAll(new RegExp(other.pattern.source, 'gi'))];
+        if (otherMatches.length > 0) {
+          const lastOther = otherMatches[otherMatches.length - 1];
+          const otherEnd = (lastOther.index ?? 0) + lastOther[0].length;
+          if (otherEnd > 0 && otherEnd < matchIndex) {
+            const candidate = clause.slice(otherEnd, matchIndex);
+            if (candidate.length < relevantBefore.length) {
+              relevantBefore = candidate;
+            }
+          }
+        }
+      }
+      const before = relevantBefore.slice(Math.max(0, relevantBefore.length - 55));
+      const qty = before.match(/\b(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\b\s+(?:pairs?\s+of\s+)?(?:(?!and\b|or\b|plus\b|with\b)[a-z-]+,?\s+){0,4}$/i);
       clauseItems.push({ category: entry.category, quantity: parseQuantity(qty?.[1]), sourceText: qty ? qty[0] + match[0] : match[0], hasInvalidQuantity: Boolean(qty && parseQuantity(qty[1]) === null) });
     }
     joinedRequest ||= clauseItems.length > 1 && /\band\b|\bplus\b|,/i.test(clause);
-    for (const item of clauseItems) if (!items.some(i => i.category === item.category)) items.push(item);
+    for (const item of clauseItems) {
+      const existing = items.find(i => i.category === item.category);
+      if (!existing) {
+        items.push(item);
+      } else if (existing.quantity === null && item.quantity !== null) {
+        existing.quantity = item.quantity;
+        existing.sourceText = item.sourceText;
+        existing.hasInvalidQuantity = item.hasInvalidQuantity;
+      }
+    }
   }
   // Choices of attributes (red or blue) and optional feature clauses must not
   // veto an explicit basket. A choice marker must actually involve items.
@@ -123,24 +151,61 @@ export function shoppingConstraints(text: string): AtomicConstraint[] {
     const local = text.slice(clauseStart, end) + tail.slice(0, nextClause < 0 ? tail.length : nextClause);
     const preference = budgetPreference(text, match.index!, end, local);
     const localCategory = productCategory(local);
-    const perItem = /\b(?:each|apiece|per item|per product)\b/i.test(local);
+    const perItem = /\b(?:each|apiece|per item|per product|per pair|per unit|a pair)\b/i.test(local) || /\b(?:each|apiece|per item|per product|per pair|per unit|a pair)\b/i.test(tail.slice(0, 30));
     const prefix = text.slice(clauseStart, match.index);
     const followingItems = tail.split(/[;\n]|\.(?=\s|$)/)[0];
-    const beforeItemGroup = !productCategory(prefix) && /\bfor\b/i.test(followingItems) && categoryPatterns.filter(c => c.pattern.test(followingItems)).length > 1;
-    const total = beforeItemGroup || /\b(?:total|combined|overall|cart|together|all items|both)\b/i.test(local);
-    const scope = request.isCart && !perItem && (total || !localCategory) ? 'cart' : 'product';
+    const followingForItems = followingItems.split(/\band\s+(?:strictly\s+under|under|below|less\s+than|at\s+most|up\s+to|at\s+least|over|above|priced|costing|budget)\b/i)[0];
+    const beforeItemGroup = !productCategory(prefix) && /\bfor\b/i.test(followingForItems) && categoryPatterns.filter(c => c.pattern.test(followingForItems)).length > 1;
+
+    // Explicit cart-level budget keywords
+    const isCartBudgetMarker = beforeItemGroup
+      || /\b(?:total\s+cart\s+budget|cart\s+budget|total\s+budget|overall\s+budget|combined\s+budget|total\s+cost|cart\s+total|in\s+total|for\s+both|for\s+all|all\s+together|entire\s+order)\b/i.test(local)
+      || /\b(?:total\s+cart\s+budget|cart\s+budget|total\s+budget|overall\s+budget|combined\s+budget|total\s+cost)\b/i.test(text.slice(clauseStart, end));
+
+    // Resolve target category:
+    // 1. Direct local category
+    let targetCategory = isCartBudgetMarker ? null : productCategory(local);
+    // 2. If not found locally, look backwards in the sentence up to match.index
+    if (!targetCategory && !isCartBudgetMarker) {
+      const sentenceStart = Math.max(before.lastIndexOf('. '), before.lastIndexOf(';\n'), before.lastIndexOf(';'), before.lastIndexOf('\n')) + 1;
+      const sentenceBefore = text.slice(sentenceStart, match.index);
+      let lastCatEnd = -1;
+      for (const entry of categoryPatterns) {
+        const catMatches = [...sentenceBefore.matchAll(new RegExp(entry.pattern.source, 'gi'))];
+        if (catMatches.length > 0) {
+          const lastM = catMatches[catMatches.length - 1];
+          const catEnd = lastM.index! + lastM[0].length;
+          if (catEnd > lastCatEnd) {
+            lastCatEnd = catEnd;
+            targetCategory = entry.category;
+          }
+        }
+      }
+    }
+    // 3. If still not found, look forwards in tail before next item boundary (only if single category)
+    if (!targetCategory && !isCartBudgetMarker) {
+      const tailSegment = tail.split(/[.;\n]|\band\b|\bplus\b/i)[0];
+      const categoriesInTail = categoryPatterns.filter(c => c.pattern.test(tailSegment));
+      if (categoriesInTail.length === 1) {
+        targetCategory = categoriesInTail[0].category;
+      }
+    }
+
+    const total = beforeItemGroup || isCartBudgetMarker || (!targetCategory && /\b(?:total|combined|overall|cart|together|all items|both)\b/i.test(local));
+    const scope = request.isCart && !perItem && (isCartBudgetMarker || (!targetCategory && total) || (!targetCategory && !productCategory(text))) ? 'cart' : (targetCategory ? 'product' : (request.isCart && !perItem ? 'cart' : 'product'));
     const word = match[1].toLowerCase().replace(/\s+/g, ' ');
     const foreignCurrency = Boolean(match[2] && match[2] !== '$') || Boolean(match[4] && !/^(USD|dollars)$/i.test(match[4]));
     const missingCurrency = !match[2] && !match[4];
     const operator = foreignCurrency || missingCurrency || /around|approximately|about/.test(word) ? 'required' : /under|below|less than/.test(word) ? '<' : /at least/.test(word) ? '>=' : /over|above|greater/.test(word) ? '>' : /exactly/.test(word) ? 'equals' : '<=';
     constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator, expectedValue: foreignCurrency ? 'Unsupported budget currency' : missingCurrency ? 'Unresolved budget currency' : Number(match[3]), scope,
-      targetProductCategory: scope === 'product' && request.isCart ? localCategory : null,
+      targetProductCategory: scope === 'product' && request.isCart ? targetCategory : null,
       constraintType: preference.soft ? 'soft' : 'hard', polarity: 'positive', sourceText: preference.evidence, confidence: 0.99 });
     coveredMoneyPositions.push(match.index!);
   }
   // A known per-item cap elsewhere must not hide an unresolved hard budget.
   for (const clause of text.matchAll(/(?:[^.;\n]|\.(?!\s|$))+/g)) {
     if (!/\bbudget\b/i.test(clause[0]) || coveredMoneyPositions.some(index => index >= clause.index! && index < clause.index! + clause[0].length)) continue;
+    if (/\b(?:unchanged|same|as\s+before|keep|retain|leave)\b/i.test(clause[0])) continue;
     const scope = request.isCart ? 'cart' : 'product';
     constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator: 'required', expectedValue: 'Unresolved budget', scope,
       targetProductCategory: scope === 'product' ? productCategory(clause[0]) : null,
@@ -236,7 +301,7 @@ export function reconcileClaimCart(result: LlmOutputClaimAnalysisResult, text: s
     const total = statedTotalClaims(rawSection)[0];
     const totalIndex = total ? rawSection.indexOf(total.sourceText) : -1;
     const section = totalIndex < 0 ? rawSection : rawSection.slice(0, totalIndex);
-    return { ...mention, section };
+    return { ...mention, start, end, section };
   });
   const products = result.products.map(p => {
     const sameName = result.products.filter(other => other.name.toLowerCase() === p.name.toLowerCase());
@@ -266,14 +331,18 @@ export function reconcileClaimCart(result: LlmOutputClaimAnalysisResult, text: s
     && !isCanonicalFeature(c.attribute.replace(/_negated$/, ''), String(c.value).replace(/^not\s+/i, '')));
   // Rebuild these feature claims from product-bounded raw text in both paths.
   // This prevents truncated API evidence and coordinated negation from inventing positives.
-  for (const p of products) {
-    const relevant = sections.filter(s => s.name === p.name.toLowerCase());
-    const evidence = relevant.length ? relevant.map(s => s.section) : products.length === 1 && p.name === 'Recommended Item' ? [text] : [];
-    const seen = new Set<string>();
-    for (const section of evidence) for (const a of featureAssertions(section)) {
-      const key = `${a.attribute}:${a.negative}:${a.sourceText}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+  for (const a of featureAssertions(text)) {
+    const before=text.slice(0,a.index);
+    const start=Math.max(before.lastIndexOf('.'),before.lastIndexOf(';'),before.lastIndexOf('\n'))+1;
+    const tail=text.slice(a.index+a.sourceText.length);
+    const next=tail.search(/[.;\n]/);
+    const clause=text.slice(start,next<0?text.length:a.index+a.sourceText.length+next);
+    const categories=categoryPatterns.filter(c=>c.pattern.test(clause));
+    // A later sentence naming the jacket overrides the last item's section.
+    // Otherwise use its actual textual item boundary, never an earlier claim.
+    const scoped=categories.length===1?products.filter(p=>p.category===categories[0].category):[];
+    const recipients=categories.length===1 ? (scoped.length===1?scoped:[]) : products.filter(p=>sections.some(s=>s.name===p.name.toLowerCase()&&a.index>=s.start&&a.index<s.end) || (products.length===1&&p.name==='Recommended Item'));
+    for (const p of recipients) {
       claims.push({ id: '', productId: p.id, productName: p.name, claimType: 'feature', nature: 'factual',
         attribute: a.attribute + (a.negative ? '_negated' : ''), operator: a.negative ? 'not_equals' : 'equals',
         value: a.negative ? `not ${a.value}` : a.value, sourceText: a.sourceText, confidence: 0.99 });
