@@ -100,3 +100,60 @@ test('selecting an earlier conversation tab still reports the full assessed hist
   const results=await evaluateConversation(turns);
   assert.equal(buildQaAssessmentReport(results[0],results),buildQaAssessmentReport(results[2],results));
 });
+
+const test6Input='I need 2 running shirts and 1 pair of running shorts. My total budget is under $85. All items must be suitable for running.';
+const test6Output='I recommend 2 RunFit running shirts at $20 each and 1 pair of RunFit running shorts at $40. Both products are specifically designed for running. The total is $60.';
+test('review: each cart requirement has one authoritative finding; only money conflicts',async()=>{
+  const p=await evaluate(test6Input,test6Output);
+  const findings=assessmentFindings(p);
+  const cartRecords=p.verificationResult.records.filter(v=>v.productId==='CART');
+  assert.equal(cartRecords.length,4);
+  for(const v of cartRecords) {
+    const matches=findings.filter(f=>f.requirement.id===v.constraintId);
+    assert.equal(matches.length,1,`${v.constraintAttribute} must not be duplicated`);
+    assert.equal(matches[0].subject,v.productName);
+    assert.equal(matches[0].status,v.status);
+    assert.equal(matches[0].conflict,!!v.conflictDetected);
+    assert.deepEqual(matches[0].evidence,v.claimEvidence);
+  }
+  assert.equal(findings.filter(f=>f.conflict).length,1);
+  assert.ok(findings.filter(f=>f.requirement.attribute==='quantity').every(f=>f.status==='PASS'&&!f.conflict));
+  const report=buildQaAssessmentReport(p);
+  assert.equal((report.match(/Verdict: CONFLICT \(UNKNOWN\)/g)??[]).length,1);
+  assert.equal((report.match(/#### Requirement /g)??[]).length,p.verificationResult.records.length);
+  const corrections=report.split('## Corrective Recommendations')[1].split('## Limitations')[0];
+  assert.equal((corrections.match(/Mandatory priority/g)??[]).length,1);
+});
+
+test('review: fallback cart summaries work only when upstream records for that requirement are absent',async()=>{
+  const p=await evaluate(test6Input,test6Output);
+  const budget=p.promptAnalysis.constraints.find(c=>c.attribute==='cart_total_price')!;
+  // Non-budget alias for a monetary constraint must retain the same conflict.
+  budget.attribute='budget';
+  p.finalEvaluationResult.cartEvaluation!.verifications.find(v=>v.constraintId===budget.id)!.constraintAttribute='budget';
+  p.verificationResult.records=p.verificationResult.records.filter(v=>v.constraintId!==budget.id);
+  const findings=assessmentFindings(p);
+  const money=findings.filter(f=>f.requirement.id===budget.id);
+  assert.equal(money.length,1);assert.equal(money[0].status,'UNKNOWN');assert.equal(money[0].conflict,true);
+  for(const c of p.promptAnalysis.constraints.filter(c=>c.scope==='cart')) assert.equal(findings.filter(f=>f.requirement.id===c.id).length,1);
+  assert.ok(findings.filter(f=>f.requirement.attribute==='quantity').every(f=>f.status==='PASS'&&!f.conflict));
+});
+
+test('review: distinct same-named products stay distinct while repeated subject records are ignored',async()=>{
+  const p=await evaluate('I need a waterproof jacket under $100.','Options: Alpha Jacket ($80) is waterproof. Beta Jacket ($90) is waterproof.');
+  assert.equal(p.claimAnalysis.products.length,2);
+  p.verificationResult.records.forEach(v=>{v.productName='Jacket';});
+  const before=assessmentFindings(p);
+  p.verificationResult.records.push({...p.verificationResult.records[0],id:'duplicate'});
+  assert.deepEqual(assessmentFindings(p),before);
+  const waterproof=assessmentFindings(p).filter(f=>f.requirement.attribute==='water_resistance');
+  assert.equal(waterproof.length,2);
+});
+
+test('review: conversation cart findings occur once for each assessed turn',async()=>{
+  const results=await evaluateConversation([{id:'T1',userPrompt:test6Input,llmOutput:test6Output},{id:'T2',userPrompt:'My total budget is under $100.',llmOutput:test6Output.replace('$60','$80')}]);
+  const report=buildQaAssessmentReport(results[1],results);
+  assert.equal((report.match(/#### Requirement /g)??[]).length,results.reduce((n,p)=>n+p.verificationResult!.records.length,0));
+  assert.equal((report.match(/Verdict: CONFLICT \(UNKNOWN\)/g)??[]).length,1);
+  assert.match(report,/Turn T1: INDETERMINATE/);assert.match(report,/Turn T2: PASS/);
+});

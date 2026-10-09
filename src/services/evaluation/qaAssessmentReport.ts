@@ -41,11 +41,18 @@ export function describeAssessmentRequirement(c: AtomicConstraint): string {
 export function assessmentFindings(p: ReportExportDataParams): AssessmentFinding[] {
   const findings: AssessmentFinding[] = [];
   for (const c of p.promptAnalysis?.constraints ?? []) {
-    const product = (p.verificationResult?.records ?? []).filter(v => v.constraintId === c.id);
-    const cart = (p.finalEvaluationResult.cartEvaluation?.verifications ?? []).filter(v => v.constraintId === c.id);
+    // Upstream records already contain cart checks. Keep one record per subject
+    // identity, preserving separate products even when their display names match.
+    const seenSubjects = new Set<string>();
+    const product = (p.verificationResult?.records ?? []).filter(v => {
+      if (v.constraintId !== c.id || seenSubjects.has(v.productId)) return false;
+      seenSubjects.add(v.productId);
+      return true;
+    });
+    const cart = product.length ? [] : (p.finalEvaluationResult.cartEvaluation?.verifications ?? []).filter(v => v.constraintId === c.id).slice(0, 1);
     for (const v of product) findings.push({ requirement:c, subject:v.productName, status:v.status, conflict:!!v.conflictDetected, evidence:v.claimEvidence });
     for (const v of cart) findings.push({ requirement:c, subject:'Combined purchase', status:v.status,
-      conflict:c.attribute === 'cart_total_price' && !!p.finalEvaluationResult.cartEvaluation?.totalDisagreement, evidence:v.claimEvidence });
+      conflict:!['cart_items', 'quantity'].includes(c.attribute) && !!p.finalEvaluationResult.cartEvaluation?.totalDisagreement, evidence:v.claimEvidence });
     if (!product.length && !cart.length) findings.push({requirement:c, subject:'Recommendation', status:'UNKNOWN', conflict:false, evidence:[]});
   }
   return findings.sort((a,b) => Number(a.requirement.constraintType === 'soft') - Number(b.requirement.constraintType === 'soft'));

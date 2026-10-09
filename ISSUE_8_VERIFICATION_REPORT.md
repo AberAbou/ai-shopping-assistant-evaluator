@@ -41,7 +41,7 @@ reevaluation. Conversation edits, turn additions/removals, and clearing already
 invalidate the result set and remove the report. Switching the selected assessed
 turn clears an edited report; regeneration still uses the full assessed history.
 
-## Verification
+## Initial implementation verification
 
 Commands ran with `DISABLE_MODEL_API=1`:
 
@@ -90,3 +90,46 @@ restored on port 3101 after verification for reviewing this feature branch.
 The new report exports Markdown; it has no dedicated PDF generator. Reviewer edits
 are local to the visible report, and sign-off still requires independent review.
 This draft is ready for review and manual acceptance, not a release approval.
+
+## PR #9 review correction — authoritative cart findings
+
+The independent review identified duplicate cart findings: upstream verification
+records already contained the cart checks, and the report appended the same checks
+from the final cart summary. Four focused deterministic regressions reproduced
+the duplicate findings, repeated subjects/actions, and missing conflict semantics
+before the correction (4 failed, 12 existing tests intentionally skipped).
+
+The report now selects one upstream record per requirement and subject identity.
+Distinct products remain separate even when their display names match. A cart
+summary supplies a single fallback finding only when no upstream record exists
+for that requirement. Upstream status, evidence, subject, and conflict flags are
+retained. Fallback monetary constraints preserve total disagreement regardless of
+the monetary attribute alias; cart membership and quantities do not inherit it.
+
+Test 6 now reports six findings: one budget, one membership, two category
+quantities, and one suitability finding for each product. Only the budget has
+CONFLICT (UNKNOWN), quantity checks remain PASS, and one corrective action addresses
+the unresolved budget. Conversation reports retain these counts for every turn.
+
+Final correction verification, all with `DISABLE_MODEL_API=1`:
+
+```powershell
+npx tsx --test --test-name-pattern='review:' scripts/test_issue8_assessment_report.ts
+npx tsx --test scripts/test_issue8_assessment_report.ts
+npm run test:all
+npm run lint
+npm run build
+npm run test:e2e
+```
+
+- Complete regression runner: 18/18 commands passed, 0 failed.
+- Stakeholder report suite: 16 passed, 0 failed (4 new review regressions).
+- Complete Chromium suite: 138 passed, 0 failed (5.3 minutes), including 3 new
+  assertions of exact finding counts, unique intended targets, monetary-only
+  conflicts, single corrective actions, downloaded content, and conversation audit.
+- TypeScript and production build passed. Existing non-blocking Vite warnings remain.
+- Git whitespace check passed; existing exports and evaluation behavior unchanged.
+
+The correction stays on `feature/human-style-assessment-report`; PR #9 remains
+draft. Main, accepted tags, original export semantics, reviewer sign-off, and red
+report controls are preserved. No merge, deployment, or paid model calls.

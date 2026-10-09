@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { analyzeUserPromptDeterministically as prompt } from '../../src/services/evaluation/fallbackPromptAnalyzer';
 import { analyzeLlmOutputDeterministically as claims } from '../../src/services/evaluation/fallbackClaimAnalyzer';
+import { describeAssessmentRequirement } from '../../src/services/evaluation/qaAssessmentReport';
 
 async function single(page:Page,input:string,output:string,fallback=false) {
   await page.route('**/api/analyze-*',async route=>{
@@ -109,4 +110,50 @@ test('QA conversation report invalidates on turn addition and clearing',async({p
   await page.getByRole('button',{name:'Add turn',exact:true}).click();await expect(page.getByRole('textbox',{name:'QA assessment report text',exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Download QA Assessment',exact:true})).toHaveCount(0);
   await page.getByRole('button',{name:'Clear conversation',exact:true}).click();await expect(page.getByRole('textbox',{name:'User turn 1',exact:true})).toHaveValue('');
+});
+
+const reviewInput='I need 2 running shirts and 1 pair of running shorts. My total budget is under $85. All items must be suitable for running.';
+const reviewOutput='I recommend 2 RunFit running shirts at $20 each and 1 pair of RunFit running shorts at $40. Both products are specifically designed for running. The total is $60.';
+for(const offline of [false,true]) test(`QA review cart findings are unique and quantity is not conflicted: ${offline?'fallback':'mock API'}`,async({page})=>{
+  await single(page,reviewInput,reviewOutput,offline);
+  await page.getByRole('button',{name:'Generate QA Assessment Report',exact:true}).click();
+  const report=await page.getByRole('textbox',{name:'QA assessment report text',exact:true}).inputValue();
+  const section=report.split('## Findings by Requirement')[1].split('## Overall Outcome & Severity')[0];
+  const blocks=section.split(/\n\n#### Requirement \d+: /).slice(1);
+  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Export JSON',exact:true}).click();
+  const json=JSON.parse(await readFile((await(await pending).path())!,'utf8'));
+  const artifacts=json.rawUpstreamArtifacts;
+  expect(blocks).toHaveLength(artifacts.verificationResult.records.length);
+  for(const v of artifacts.verificationResult.records) {
+    const c=artifacts.promptAnalysis.constraints.find((c:any)=>c.id===v.constraintId);
+    const matches=blocks.filter(b=>b.startsWith(`${v.productName}\n`)&&b.includes(`Expected: ${describeAssessmentRequirement(c)}`));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toContain(`Verdict: ${v.conflictDetected?'CONFLICT (UNKNOWN)':v.status}.`);
+    if(c.attribute==='quantity') {expect(matches[0]).toContain('Verdict: PASS.');expect(matches[0]).not.toContain('CONFLICT');}
+  }
+  expect((section.match(/Verdict: CONFLICT \(UNKNOWN\)/g)??[])).toHaveLength(1);
+  expect((report.split('## Corrective Recommendations')[1].split('## Limitations')[0].match(/Mandatory priority/g)??[])).toHaveLength(1);
+  expect(await download(page)).toBe(report);
+});
+
+test('QA review conversation cart requirements are not repeated in each turn',async({page})=>{
+  await page.route('**/api/analyze-*',()=>{throw new Error('Conversation must remain offline.');});
+  await page.goto('/');await page.getByRole('button',{name:'Conversation',exact:true}).click();
+  await page.getByRole('textbox',{name:'User turn 1',exact:true}).fill(reviewInput);
+  await page.getByRole('textbox',{name:'Assistant turn 1',exact:true}).fill(reviewOutput);
+  await page.getByRole('button',{name:'Add turn',exact:true}).click();
+  await page.getByRole('textbox',{name:'User turn 2',exact:true}).fill('My total budget is under $100.');
+  await page.getByRole('textbox',{name:'Assistant turn 2',exact:true}).fill(reviewOutput.replace('$60','$80'));
+  await page.getByRole('button',{name:'Evaluate conversation',exact:true}).click();await expect(page.getByTestId('conversation-verdict')).toHaveText('Turn T2: PASS');
+  await page.getByRole('button',{name:/10\. Report & Export/}).click();await page.getByRole('button',{name:'Generate QA Assessment Report',exact:true}).click();
+  const report=await page.getByRole('textbox',{name:'QA assessment report text',exact:true}).inputValue();
+  const section=report.split('## Findings by Requirement')[1].split('## Overall Outcome & Severity')[0];
+  for(const turn of ['T1','T2']) {
+    const turnSection=section.split(`### Turn ${turn}`)[1].split('### Turn ')[0];
+    expect((turnSection.match(/#### Requirement /g)??[])).toHaveLength(6);
+    expect((turnSection.match(/Expected: Requested quantity /g)??[])).toHaveLength(2);
+    expect((turnSection.match(/Verdict: CONFLICT \(UNKNOWN\)/g)??[])).toHaveLength(turn==='T1'?1:0);
+  }
+  expect(report).toContain('Turn T1: INDETERMINATE');expect(report).toContain('Turn T2: PASS');
+  expect(await download(page)).toBe(report);
 });
