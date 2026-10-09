@@ -131,10 +131,12 @@ export function shoppingConstraints(text: string): AtomicConstraint[] {
 export function reconcilePromptCart(result: UserPromptAnalysisResult, text: string): UserPromptAnalysisResult {
   const canonical = shoppingConstraints(text);
   const cart = cartRequest(text);
+  const collectiveActivity = text.match(/\b(?:all (?:items|products)|both (?:items|products))\s+must\s+be\s+(?:suitable|designed)\s+for\s+(trail running|running|jogging|hiking|cycling|walking|training)\b/i);
+  if (collectiveActivity) canonical.push({ id: '', attribute: 'use_case', operator: 'suitable_for', expectedValue: collectiveActivity[1].toLowerCase(), scope: 'product', targetProductCategory: null, constraintType: 'hard', polarity: 'positive', sourceText: collectiveActivity[0], confidence: 0.99 });
   const constraints = [...canonical, ...result.constraints.filter(c => !isCartConstraint(c) && !['price', 'budget', 'quantity'].includes(c.attribute)).map(c => ({ ...c,
     scope: 'product' as const,
     targetProductCategory: cart.isCart ? c.targetProductCategory ?? constraintCategory(text, c.sourceText) : null,
-  }))].map((c, i) => ({ ...c, id: `C${i + 1}` }));
+  })).filter(c => !(collectiveActivity && c.attribute === 'use_case' && String(c.expectedValue).toLowerCase() === collectiveActivity[1].toLowerCase()))].map((c, i) => ({ ...c, id: `C${i + 1}` }));
   const summary = { ...result.summary, totalConstraints: constraints.length, hardCount: constraints.filter(c => c.constraintType === 'hard').length,
     softCount: constraints.filter(c => c.constraintType === 'soft').length, negativeCount: constraints.filter(c => c.polarity === 'negative').length };
   const budget = canonical.find(c => c.attribute === 'cart_total_price') ?? canonical.find(c => c.attribute === 'price');
@@ -231,7 +233,30 @@ export function reconcileClaimCart(result: LlmOutputClaimAnalysisResult, text: s
     return { ...p, category: productCategory(p.name) ?? productCategory(p.category ?? '') ?? p.category, quantity, parsedQuantity, unitPrice,
       lineTotal: unitPrice?.amount != null && parsedQuantity != null ? { amount: Math.round(unitPrice.amount * 100) * parsedQuantity / 100, currency: unitPrice.currency } : null };
   });
-  const claims = result.claims.filter(c => !['quantity', 'line_total', 'cart_total_price', 'total_price'].includes(c.attribute));
+  const claims = result.claims.filter(c => !['quantity', 'line_total', 'cart_total_price', 'total_price', 'use_case'].includes(c.attribute));
+  // Reconcile activity assertions from raw evidence in both API and fallback paths.
+  // Explicit universal subjects distribute only this assertion, never adjacent
+  // product-specific attributes. Keep the complete clause for polarity/provenance.
+  const aliases = products.map(p => p.name.replace(/^pair of\s+/i, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const boundary = new RegExp(`\\s+(?:and|but)\\s+(?=(?:\\d+\\s|all\\s+items\\s|both\\s+items\\s|${aliases.join('|')}))`, 'i');
+  const activityClauses = [...text.matchAll(/[^.;\n]+/g)].flatMap(m => m[0].split(boundary));
+  for (const clause of activityClauses) {
+    const sentence = clause.trim();
+    if (/\b(?:if|might|may|could|not all|not both)\b/i.test(sentence)) continue;
+    const activities = [...sentence.matchAll(/\b((?:not|never)\s+)?(?:specifically\s+)?(designed|built|engineered|crafted|made|intended|suitable|unsuitable|ideal|perfect|great)\s+for\s+([a-zA-Z\s]*?\b(?:trail running|running|jogging|hiking|marathons?|cycling|walking|workouts?|training|gym|racing|trails)\b)/gi)];
+    if (!activities.length) continue;
+    const collective = /^(?:all (?:items|products)(?:\s+in\s+(?:the|this)\s+cart)?|both (?:items|products))\s+(?:are|were)\b/i.test(sentence);
+    const explicit = products.filter(p => sentence.toLowerCase().includes(p.name.replace(/^pair of\s+/i, '').toLowerCase()));
+    const category = productCategory(sentence);
+    const categoryProducts = products.filter(p => productCategory(p.name) === category);
+    const local = sections.filter(s => s.section.includes(sentence));
+    const recipients = collective ? products : explicit.length ? explicit : category ? (categoryProducts.length === 1 ? categoryProducts : []) : products.filter(p => local.some(s => s.name === p.name.toLowerCase()));
+    for (const activity of activities) {
+      const negative = Boolean(activity[1]) || activity[2].toLowerCase() === 'unsuitable';
+      for (const p of recipients) claims.push({ id: '', productId: p.id, productName: p.name, claimType: 'suitability', nature: 'factual', attribute: 'use_case', operator: negative ? 'not_suitable_for' : 'suitable_for', value: activity[3].trim().toLowerCase(), sourceText: sentence, confidence: 0.95, reasoning: collective ? 'Explicit collective activity assertion applies to every recommended product.' : 'Product-scoped activity assertion.' });
+    }
+  }
+  for (const p of products) p.suitability = claims.filter(c => c.productId === p.id && c.claimType === 'suitability' && c.operator === 'suitable_for').map(c => String(c.value));
   claims.push(...statedTotalClaims(text));
   for (const p of products) if (p.parsedQuantity != null) claims.push({ id: `CL${claims.length + 1}`, productId: p.id, productName: p.name, claimType: 'quantity', nature: 'factual', attribute: 'quantity', operator: 'equals', value: p.parsedQuantity, unit: 'units', sourceText: p.quantity!, confidence: 0.98 });
   claims.forEach((c, i) => { c.id = `CL${i + 1}`; });

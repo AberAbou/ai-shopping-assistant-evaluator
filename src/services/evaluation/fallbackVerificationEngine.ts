@@ -326,13 +326,24 @@ export function verifyProductConstraintsDeterministically(
         // CASE F: ACTIVITY / USE-CASE SUITABILITY (trail running, running, hiking)
         else if (attr === 'use_case' || op === 'suitable_for') {
           const activityName = String(expectedVal).toLowerCase();
-          const activityClaim = productClaims.find(
+          const activityClaims = productClaims.filter(
             (c) => (c.claimType === 'suitability' || c.claimType === 'feature') &&
                    (!pName || c.sourceText.trim().toLowerCase() !== pName.trim().toLowerCase()) &&
-                   new RegExp(`\\b${activityName}\\b`, 'i').test(c.sourceText)
+                   new RegExp(`\\b${activityName}\\b`, 'i').test(c.attribute === 'use_case' ? String(c.value) : c.sourceText)
           );
-
-          if (activityClaim) {
+          const deniesActivity = (c: ExtractedClaim) => c.operator === 'not_suitable_for' || (c.operator !== 'suitable_for' && /\b(?:not|never)\s+(?:specifically\s+)?(?:designed|built|engineered|crafted|made|intended|suitable|ideal|perfect|great)\b|\bunsuitable\b/i.test(c.sourceText));
+          const negative = activityClaims.find(deniesActivity);
+          const activityClaim = activityClaims.find(c => !deniesActivity(c));
+          if (negative && activityClaim) {
+            status = 'UNKNOWN';
+            conflictDetected = true;
+            claimEvidence = [activityClaim.sourceText, negative.sourceText];
+            reason = `Conflicting activity suitability claims for ${pName}; suitability for ${activityName} remains UNKNOWN.`;
+          } else if (negative) {
+            status = 'FAIL';
+            claimEvidence = [negative.sourceText];
+            reason = `Product explicitly denies suitability for ${activityName}.`;
+          } else if (activityClaim) {
             status = 'PASS';
             method = 'deterministic';
             confidence = 0.95;
