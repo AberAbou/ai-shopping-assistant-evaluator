@@ -7,6 +7,7 @@ import {
   VerificationPriority,
   InternalConsistencyStatus,
 } from '../../types/evaluation';
+import { featureAssertions } from './featurePolarity';
 
 /**
  * Internal contradiction detection across extracted claims.
@@ -20,6 +21,13 @@ function findContradictingClaims(
   const sameProductClaims = allClaims.filter(
     (c) => c.productId === pId || (!claim.productId && !c.productId)
   );
+
+  // Coordinated feature negation must also agree with verification conflicts.
+  const ownFeatures = featureAssertions(claim.sourceText).filter(a => a.attribute === claim.attribute.replace(/_negated$/, ''));
+  for (const own of ownFeatures) {
+    const conflicting = sameProductClaims.filter(c => c.id !== claim.id && c.attribute.replace(/_negated$/, '') === own.attribute && featureAssertions(c.sourceText).some(a => a.value === own.value && a.negative !== own.negative));
+    if (conflicting.length) return { isContradicted: true, conflictingIds: conflicting.map(c => c.id), conflictingEvidence: conflicting.map(c => c.sourceText) };
+  }
 
   // Check 1: Waterproof vs Not Waterproof
   if (claim.attribute === 'water_resistance' || claim.attribute === 'water_resistance_negated') {

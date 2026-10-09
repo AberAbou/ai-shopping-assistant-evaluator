@@ -1,4 +1,5 @@
 import type { AtomicConstraint, ExtractedProduct, LlmOutputClaimAnalysisResult, UserPromptAnalysisResult } from '../../types/evaluation';
+import { featureAssertions, isCanonicalFeature, reconcileFeatureConstraints } from './featurePolarity';
 
 export const categoryPatterns = [
   { category: 'jacket', pattern: /\b(jackets?|outerwear|coats?)\b/i },
@@ -156,6 +157,7 @@ export function shoppingConstraints(text: string): AtomicConstraint[] {
 
 /** Common reconciliation for API and fallback; unrelated model-extracted attributes are retained. */
 export function reconcilePromptCart(result: UserPromptAnalysisResult, text: string): UserPromptAnalysisResult {
+  result = reconcileFeatureConstraints(result, text);
   const canonical = shoppingConstraints(text);
   const cart = cartRequest(text);
   const collectiveActivity = text.match(/\b(?:all (?:items|products)|both (?:items|products))\s+must\s+be\s+(?:suitable|designed)\s+for\s+(trail running|running|jogging|hiking|cycling|walking|training)\b/i);
@@ -260,7 +262,23 @@ export function reconcileClaimCart(result: LlmOutputClaimAnalysisResult, text: s
     return { ...p, category: productCategory(p.name) ?? productCategory(p.category ?? '') ?? p.category, quantity, parsedQuantity, unitPrice,
       lineTotal: unitPrice?.amount != null && parsedQuantity != null ? { amount: Math.round(unitPrice.amount * 100) * parsedQuantity / 100, currency: unitPrice.currency } : null };
   });
-  const claims = result.claims.filter(c => !['quantity', 'line_total', 'cart_total_price', 'total_price', 'use_case'].includes(c.attribute));
+  const claims = result.claims.filter(c => !['quantity', 'line_total', 'cart_total_price', 'total_price', 'use_case'].includes(c.attribute)
+    && !isCanonicalFeature(c.attribute.replace(/_negated$/, ''), String(c.value).replace(/^not\s+/i, '')));
+  // Rebuild these feature claims from product-bounded raw text in both paths.
+  // This prevents truncated API evidence and coordinated negation from inventing positives.
+  for (const p of products) {
+    const relevant = sections.filter(s => s.name === p.name.toLowerCase());
+    const evidence = relevant.length ? relevant.map(s => s.section) : products.length === 1 && p.name === 'Recommended Item' ? [text] : [];
+    const seen = new Set<string>();
+    for (const section of evidence) for (const a of featureAssertions(section)) {
+      const key = `${a.attribute}:${a.negative}:${a.sourceText}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      claims.push({ id: '', productId: p.id, productName: p.name, claimType: 'feature', nature: 'factual',
+        attribute: a.attribute + (a.negative ? '_negated' : ''), operator: a.negative ? 'not_equals' : 'equals',
+        value: a.negative ? `not ${a.value}` : a.value, sourceText: a.sourceText, confidence: 0.99 });
+    }
+  }
   // Reconcile activity assertions from raw evidence in both API and fallback paths.
   // Explicit universal subjects distribute only this assertion, never adjacent
   // product-specific attributes. Keep the complete clause for polarity/provenance.

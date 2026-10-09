@@ -34,6 +34,9 @@ function createCriterionTemplate(
   } else if (isNegative && (attr === 'fragrance' || val.toLowerCase().includes('fragrance'))) {
     title = 'Fragrance-Free Formulation';
     description = `Product must be free of added artificial or synthetic fragrances ("${constraint.sourceText}").`;
+  } else if (isNegative && ['waterproof', 'insulated'].includes(val.toLowerCase())) {
+    title = `No ${val.charAt(0).toUpperCase() + val.slice(1)} Feature`;
+    description = `Product must exclude the prohibited ${val} property ("${constraint.sourceText}").`;
   } else if (attr === 'skin_type' || val.toLowerCase().includes('sensitive skin')) {
     title = 'Sensitive Skin Suitability';
     description = `Product must be formulated for and safe for sensitive skin ("${constraint.sourceText}").`;

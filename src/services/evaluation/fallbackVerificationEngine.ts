@@ -14,6 +14,7 @@ import {
 } from '../../types/evaluation';
 import { isCartConstraint, appliesToProduct } from './shoppingCartSemantics';
 import { evaluateShoppingCart } from './shoppingCartEngine';
+import { featureAssertions } from './featurePolarity';
 
 /**
  * Deterministic and semantic verification engine.
@@ -123,14 +124,19 @@ export function verifyProductConstraintsDeterministically(
       let conflictDetected = false;
 
       // 1. Contradiction Detection
-      const conflictCheck = checkContradictions(productClaims, constraint);
+      const featureValue = String(constraint.expectedValue).toLowerCase();
+      const feature = featureValue === 'waterproof' || featureValue === 'insulated';
+      const featureEvidence = feature ? productClaims.flatMap(c => featureAssertions(c.sourceText).filter(a => a.value === featureValue)) : [];
+      const positiveFeature = featureEvidence.find(a => !a.negative);
+      const negativeFeature = featureEvidence.find(a => a.negative);
+      const conflictCheck = feature ? { hasConflict: Boolean(positiveFeature && negativeFeature), conflictingEvidence: positiveFeature && negativeFeature ? [positiveFeature.sourceText, negativeFeature.sourceText] : [] } : checkContradictions(productClaims, constraint);
       if (conflictCheck.hasConflict) {
         status = 'UNKNOWN';
         conflictDetected = true;
         method = 'deterministic';
         confidence = 0.99;
         claimEvidence = conflictCheck.conflictingEvidence;
-        reason = `Conflicting evidence detected in assistant output: both waterproof and non-waterproof attributes were asserted for ${pName}.`;
+        reason = `Conflicting evidence detected in assistant output for ${constraint.expectedValue} on ${pName}.`;
       } else {
         // 2. Attribute-Specific Verification
         const attr = constraint.attribute.toLowerCase();
@@ -139,7 +145,16 @@ export function verifyProductConstraintsDeterministically(
         const isNegative = constraint.polarity === 'negative';
 
         // CASE A: PRICE CONSTRAINTS
-        if (attr === 'conversation_issue') {
+        if (feature) {
+          const evidence = positiveFeature ?? negativeFeature;
+          if (evidence) {
+            status = evidence.negative === isNegative ? 'PASS' : 'FAIL';
+            claimEvidence = [evidence.sourceText];
+            reason = `Product explicitly ${evidence.negative ? 'denies' : 'asserts'} ${featureValue}; this ${status === 'PASS' ? 'satisfies' : 'violates'} the shopper’s ${isNegative ? 'exclusion' : 'requirement'}.`;
+          } else {
+            reason = `No explicit evidence establishes presence or absence of ${featureValue} for ${pName}.`;
+          }
+        } else if (attr === 'conversation_issue') {
           status = 'UNKNOWN';
           reason = `Conversation clarification is required: ${constraint.reasoning ?? constraint.sourceText}`;
         } else if (attr === 'price' || attr === 'budget') {
