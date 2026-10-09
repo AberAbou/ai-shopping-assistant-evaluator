@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { QaAssessmentReport } from './QaAssessmentReport';
+import type { ReportExportDataParams } from '../services/evaluation/reportExportHelper';
 import {
   Printer,
   Download,
@@ -52,6 +54,8 @@ import {
 } from '../services/evaluation/reportExportHelper';
 
 interface ReportExportViewProps {
+  conversationAssessments?: ReportExportDataParams[];
+  isInputsModified?: boolean;
   inputs: EvaluatorInput;
   promptAnalysis: UserPromptAnalysisResult | null;
   claimAnalysis: LlmOutputClaimAnalysisResult | null;
@@ -77,6 +81,8 @@ export const ReportExportView: React.FC<ReportExportViewProps> = ({
   recommendationResult,
   finalEvaluationResult,
   onSelectTab,
+  conversationAssessments,
+  isInputsModified,
 }) => {
   const [reportMode, setReportMode] = useState<'concise' | 'detailed' | 'technical'>('concise');
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
@@ -460,6 +466,7 @@ export const ReportExportView: React.FC<ReportExportViewProps> = ({
       {/* ========================================================================= */}
       {/* 1. CONCISE PROFESSIONAL REPORT DOCUMENT VIEW */}
       {/* ========================================================================= */}
+      <QaAssessmentReport params={{inputs,promptAnalysis,claimAnalysis,verificationResult,rubricResult,claimSupportResult,rootCauseResult,severityAndScoringResult,recommendationResult,finalEvaluationResult}} conversationAssessments={conversationAssessments} stale={isInputsModified} />
       {reportMode === 'concise' && (
         <div className="print-clean-card p-6 md:p-8 rounded-xl bg-slate-950 border border-slate-800 space-y-6 text-slate-200">
           

@@ -27,5 +27,6 @@ run('scripts/test_checkpoint14c1_soft_budget.ts', [tsx, '--test', 'scripts/test_
 run('scripts/test_checkpoint14c2_reporting.ts', [tsx, '--test', 'scripts/test_checkpoint14c2_reporting.ts']);
 run('scripts/test_checkpoint14c3_conversation.ts', [tsx, '--test', 'scripts/test_checkpoint14c3_conversation.ts']);
 run('scripts/test_issue6_negated_properties.ts', [tsx, '--test', 'scripts/test_issue6_negated_properties.ts']);
-console.log(`All-suite runner: ${17 - failures}/17 commands passed, ${failures} failed.`);
+run('scripts/test_issue8_assessment_report.ts', [tsx, '--test', 'scripts/test_issue8_assessment_report.ts']);
+console.log(`All-suite runner: ${18 - failures}/18 commands passed, ${failures} failed.`);
 process.exitCode = failures ? 1 : 0;

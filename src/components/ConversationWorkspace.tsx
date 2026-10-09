@@ -38,7 +38,7 @@ export function ConversationWorkspace() {
       <p data-testid="conversation-verdict">Turn {active.inputs.conversation.evaluatedTurnId}: {active.finalEvaluationResult.finalVerdict}</p>
       <details><summary>Active requirements and turn provenance</summary><ul>{active.promptAnalysis?.constraints.map(c=><li key={c.id}>{c.id} ({c.sourceTurnId}): {c.constraintType} {c.attribute} — {c.sourceText}</li>)}</ul></details>
       {active.inputs.conversation.unresolved.map((i,index)=><p key={index}>Clarification needed ({i.turnId}): {i.reason}</p>)}
-      <ResultsDashboard {...active} isInputsModified={false} />
+      <ResultsDashboard {...active} conversationAssessments={results} isInputsModified={false} />
     </>}
   </section>;
 }
