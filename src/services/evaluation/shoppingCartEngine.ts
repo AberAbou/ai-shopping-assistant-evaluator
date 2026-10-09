@@ -34,11 +34,9 @@ export function evaluateShoppingCart(constraints: AtomicConstraint[], products: 
       const wrongCounts = requested.filter(r => r.quantity !== null && cartItems.some(i => i.category === r.category)
         && cartItems.filter(i => i.category === r.category).every(i => i.quantity !== null)
         && cartItems.filter(i => i.category === r.category).reduce((sum, i) => sum + i.quantity!, 0) !== r.quantity);
-      status = !invalidRequest && wrongCounts.length > 0 ? 'FAIL' : requested.length > 0 && !invalidRequest && missing.length === 0 && cartItems.every(i => !i.isMissingQuantity) && !totalDisagreement && !ambiguousStatedTotal ? 'PASS' : 'UNKNOWN';
+      status = !invalidRequest && wrongCounts.length > 0 ? 'FAIL' : requested.length > 0 && !invalidRequest && missing.length === 0 && cartItems.every(i => !i.isMissingQuantity) ? 'PASS' : 'UNKNOWN';
       reason = invalidRequest ? 'The requested quantity is invalid or ambiguous; clarification is required.'
         : wrongCounts.length ? `Requested category quantities do not match: ${wrongCounts.map(r => `${r.category} requires ${r.quantity}`).join(', ')}.`
-        : ambiguousStatedTotal ? 'Stated total has ambiguous amount or unsupported currency; cart compliance remains UNKNOWN.'
-        : totalDisagreement ? 'Calculated and stated cart totals disagree; neither conflicting total is arbitrarily accepted.'
         : missing.length ? `Missing recommendation evidence for requested categories: ${missing.map(r => r.category).join(', ')}.`
         : status === 'UNKNOWN' ? 'Required cart items or quantities are missing or ambiguous.'
         : requested.some(r => r.quantity !== null) ? 'Requested categories are represented and their explicit requested quantities match the summed item quantities.'
@@ -69,11 +67,15 @@ export function evaluateShoppingCart(constraints: AtomicConstraint[], products: 
       }
     }
     const id = nextId();
-    const claimEvidence = cartItems.map(i => `${i.quantity ?? 'Unknown'}x ${i.productName}: unit price ${i.unitPrice == null ? 'Unknown' : `$${i.unitPrice}`} / line total ${i.lineTotal == null ? 'Unknown' : `$${i.lineTotal}`}`);
-    if (statedCartTotal !== null) claimEvidence.push(`Stated total: $${statedCartTotal}`);
-    if (ambiguousStatedTotal) claimEvidence.push(...totalClaims.filter(c => c.unit !== 'USD' || typeof c.value !== 'number').map(c => `Unresolved stated total: ${c.sourceText}`));
+    const monetary = !['cart_items', 'quantity'].includes(c.attribute);
+    const evidenceItems = c.attribute === 'quantity' ? cartItems.filter(i => !c.targetProductCategory || i.category === c.targetProductCategory) : cartItems;
+    const claimEvidence = evidenceItems.map(i => monetary
+      ? `${i.quantity ?? 'Unknown'}x ${i.productName}: unit price ${i.unitPrice == null ? 'Unknown' : `$${i.unitPrice}`} / line total ${i.lineTotal == null ? 'Unknown' : `$${i.lineTotal}`}`
+      : `${i.quantity ?? 'Unknown'}x ${i.productName} (${i.category ?? 'Unknown category'}); quantity evidence: ${i.quantitySourceText ?? 'Missing or ambiguous'}`);
+    if (monetary) claimEvidence.push(...totalClaims.map(c => c.unit === 'USD' && typeof c.value === 'number'
+      ? `Stated total: $${c.value}` : `Unresolved stated total: ${c.sourceText}`));
     records.push({ id, productId: 'CART', productName: 'Shopping Cart', constraintId: c.id, constraintAttribute: c.attribute,
-      constraintType: c.constraintType, polarity: c.polarity, status, constraintEvidence: c.sourceText, claimEvidence, reason, method: 'deterministic', confidence: 1, conflictDetected: totalDisagreement });
+      constraintType: c.constraintType, polarity: c.polarity, status, constraintEvidence: c.sourceText, claimEvidence, reason, method: 'deterministic', confidence: 1, conflictDetected: monetary && totalDisagreement });
     return { id, constraintId: c.id, constraintAttribute: c.attribute, constraintType: c.constraintType, polarity: c.polarity, status,
       operator: c.operator, expectedValue: c.expectedValue as string | number, actualCartTotal: effectiveCartTotal, items: cartItems,
       constraintEvidence: c.sourceText, claimEvidence, reason, method: 'deterministic' as const, confidence: 1 };
