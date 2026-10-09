@@ -59,7 +59,8 @@ is unresolved; confirmed hard failures retain precedence over UNKNOWN.
 Multiple labeled candidate carts require an explicit matching option selection.
 Only the selected, uniquely labeled snapshot is parsed. Unselected, mismatched,
 or duplicate labels cannot combine alternatives into one cart or silently select
-the first candidate. Calculated/stated total disagreement continues to affect
+the first candidate. Choices apply only to their paired assistant response;
+historical option labels are not carried forward. Calculated/stated total disagreement continues to affect
 monetary verification independently of membership and quantity verification.
 
 Constraints, requested items, and extracted claims retain their source turn IDs.
@@ -116,17 +117,16 @@ The final complete deterministic run passed all **16/16 commands**, zero failure
 | Collective suitability | 57 passed, 0 failed |
 | Soft budgets | 50 passed, 0 failed |
 | 14C.2 reporting | 20 passed, 0 failed |
-| 14C.3 conversations | 51 passed, 0 failed |
+| 14C.3 conversations | 55 passed, 0 failed |
 
-The complete Chromium suite passed **96/96**, zero failures (83 established
-tests plus 13 conversation tests). After the final conservative removal and
-quantity-normalization adjustments, all 13 affected browser workflows were
-rerun successfully against the final source. These runs used Playwright's
+The complete Chromium suite passed **100/100**, zero failures (83 established
+tests plus 17 conversation tests), including all four independent-review
+regressions. These runs used Playwright's
 managed server with `PORT=3101` and `DISABLE_MODEL_API=1`; existing API scenarios
 used mocked responses, and conversation scenarios reject model endpoint calls.
 
 TypeScript: `tsc --noEmit` passed with zero errors.
-Production build: passed, 1,692 modules; JavaScript 605.82 kB / gzip 149.88 kB.
+Production build: passed, 1,692 modules; JavaScript 606.28 kB / gzip 150.07 kB.
 Existing Vite warnings about the future native configuration loader and a
 bundle larger than 500 kB remain. Neither is a compilation failure.
 
@@ -152,3 +152,54 @@ tag was created. Main and previously accepted tags were not changed during
 implementation, and the separate Gemini review repository was untouched.
 Dependencies, credentials, build outputs, and test artifacts remain excluded.
 Test servers shut down automatically; port 3101 has no listener at completion.
+
+## Independent PR #5 review correction
+
+Review: https://github.com/AberAbou/ai-shopping-assistant-evaluator/pull/5#pullrequestreview-5465946371
+
+Confirmed the blocking stale-choice defect. T2's explicit Option A selection was
+stored in durable conversation state, so a T3 `Yes.` could silently select a new
+Option A from newly presented candidates and return PASS. The added deterministic
+regression reproduced that false PASS before the fix.
+
+Removed selection from persistent cart state. The evaluator now derives a choice
+solely from the user turn paired with the evaluated assistant response. A fresh
+explicit choice can select that response's candidate; historical selection actions
+remain in the audit trail but do not influence later snapshots. This matches the
+complete-snapshot policy without changing durable budgets, quantities, exclusions,
+or other requirements.
+
+Explicit references to earlier responses, such as `Choose option A from T2`,
+remain UNKNOWN and require clarification of the current response choice. This
+patch does not resolve historical candidate identities or remap their labels to
+new responses. Competing current choices also require clarification.
+
+Four deterministic regressions cover stale T2/T3 selection, fresh T3 selections
+with distinct totals and current-turn claim provenance, historical references,
+and competing choices. Four Chromium cases check T3 `Yes.` (INDETERMINATE), fresh
+Option A (PASS), fresh Option B (FAIL), and a T2 reference (INDETERMINATE), while
+confirming T2's earlier evaluation remains PASS. Main, accepted tags, and the
+separate Gemini review repository remain unchanged; the PR remains draft pending
+independent re-review and manual acceptance.
+
+Review verification commands:
+
+```text
+npx tsx --test --test-name-pattern="prior option|fresh choice|reference to an earlier|competing current" scripts/test_checkpoint14c3_conversation.ts
+npx tsx --test scripts/test_checkpoint14c3_conversation.ts
+npm run lint
+npm run test:all
+npm run build
+npm run test:e2e
+```
+
+Before the fix, the targeted reproduction had three failures, one pass, and
+51 intentionally skipped existing tests. After the fix, all 55 conversation
+tests and all 16 complete-suite commands passed. TypeScript and the build passed.
+The first full Chromium run had 99 passes and one failure: the trace showed
+an unexpected page navigation clearing the already evaluated single-prompt UI,
+coinciding with a report edit during the watched development-server run. No
+incorrect verification values were observed. The complete suite was rerun with
+the checkout unchanged and passed 100/100. No application assertions were weakened
+or unrelated source fixes introduced. Test servers stopped after verification;
+no paid models were used.

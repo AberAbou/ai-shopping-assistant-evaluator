@@ -62,6 +62,30 @@ test('assistant cannot revise user budget',async()=>{assert.equal(verdict(await 
 test('foreign currency revision remains unknown',async()=>{assert.equal(verdict(await run('My total budget is under 100 EUR.')),'INDETERMINATE');});
 test('total disagreement preserves quantity independence',async()=>{const r=await run('Yes.',output.replace('$80','$60'));assert.equal(verdict(r),'INDETERMINATE');assert.ok(r.verificationResult!.records.filter(v=>v.constraintAttribute==='quantity').every(v=>v.status==='PASS'));});
 const options=`Option A: ${output}\nOption B: ${output.replace('$20','$30').replace('$80','$100')}`;
+const newOptions=`Option A: ${output.replace('$20','$10').replace('$80','$60')}\nOption B: ${output.replace('$20','$30').replace('$80','$100')}`;
+test('a prior option choice cannot select a new candidate set',async()=>{
+  const results=await evaluateConversation([turn(input),turn('Choose option A.',options,'T2'),turn('Yes.',newOptions,'T3')]);
+  assert.equal(verdict(results[1]),'PASS');assert.equal(verdict(results[2]),'INDETERMINATE');
+  assert.deepEqual(results[2].claimAnalysis!.products,[]);
+  assert.equal(results[2].inputs.conversation.changes.filter(c=>c.action==='select option').length,1);
+});
+test('a fresh choice selects only the current response candidate',async()=>{
+  for(const [choice,expected] of [['A','PASS'],['B','FAIL']] as const){
+    const r=(await evaluateConversation([turn(input),turn('Choose option A.',options,'T2'),turn(`Choose option ${choice}.`,newOptions,'T3')])).at(-1)!;
+    assert.equal(verdict(r),expected);
+    assert.equal(r.finalEvaluationResult.cartEvaluation!.calculatedCartTotal,choice==='A'?60:100);
+    assert.ok(r.claimAnalysis!.claims.every(c=>c.sourceTurnId==='T3'));
+  }
+});
+test('a reference to an earlier option cannot bind a current label',async()=>{
+  for(const reference of ['Choose option A from the previous response.','Choose option A from T2.']){
+    const r=(await evaluateConversation([turn(input),turn('Choose option A.',options,'T2'),turn(reference,newOptions,'T3')])).at(-1)!;
+    assert.equal(verdict(r),'INDETERMINATE');
+  }
+});
+test('competing current option choices require clarification',async()=>{
+  assert.equal(verdict(await run('Choose option A or choose option B.',options)),'INDETERMINATE');
+});
 test('unselected candidates cannot combine into cart',async()=>{assert.equal(verdict(await run('Yes.',options)),'INDETERMINATE');});
 test('explicit candidate selection isolates selected cart',async()=>{assert.equal(verdict(await run('Choose option A.',options)),'PASS');assert.equal(verdict(await run('Choose option B.',options)),'FAIL');});
 test('missing selected option remains unknown',async()=>{assert.equal(verdict(await run('Choose option C.',options)),'INDETERMINATE');});

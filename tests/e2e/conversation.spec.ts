@@ -34,6 +34,14 @@ test('14C.3 ambiguous update and explicit clarification',async({page})=>{
   await expect(page.getByTestId('conversation-verdict')).toHaveText('Turn T3: PASS');
   await page.getByRole('combobox',{name:'Evaluated turn'}).selectOption('1');await expect(page.getByTestId('conversation-verdict')).toHaveText('Turn T2: INDETERMINATE');
 });
+for(const [request,expected] of [['Yes.','INDETERMINATE'],['Choose option A.','PASS'],['Choose option B.','FAIL'],['Choose option A from T2.','INDETERMINATE']] as const) test(`14C.3 option choices are response-local: ${request}`,async({page})=>{
+  const oldCandidates=`Option A: ${output}\nOption B: ${output.replace('$20','$30').replace('$80','$100')}`;
+  const newCandidates=`Option A: ${output.replace('$20','$10').replace('$80','$60')}\nOption B: ${output.replace('$20','$30').replace('$80','$100')}`;
+  await fill(page,[[input,output],['Choose option A.',oldCandidates],[request,newCandidates]]);
+  await expect(page.getByTestId('conversation-verdict')).toHaveText(`Turn T3: ${expected}`);
+  await page.getByRole('combobox',{name:'Evaluated turn'}).selectOption('1');
+  await expect(page.getByTestId('conversation-verdict')).toHaveText('Turn T2: PASS');
+});
 test('14C.3 JSON export contains transcript and per-turn evidence; edits clear results',async({page})=>{
   await fill(page,[[input,output],['My total budget is under $100.',output]]);
   await page.getByRole('button',{name:/10\. Report & Export/}).click();

@@ -16,7 +16,7 @@ type Item = RequestedCartItem & { sourceTurnId: string };
 type Issue = ConversationContext['unresolved'][number];
 interface State {
   items: Item[]; requirements: AtomicConstraint[]; cart: boolean;
-  changes: ConversationChange[]; unresolved: Issue[]; selection: string | null;
+  changes: ConversationChange[]; unresolved: Issue[];
   suspended?: { items: Item[]; requirements: AtomicConstraint[]; issueTurnId: string };
 }
 export interface ConversationEvaluation extends ReportExportDataParams { inputs: { userPrompt: string; llmOutput: string; conversation: ConversationContext } }
@@ -32,6 +32,19 @@ function requirementClause(text: string, source: string): string {
   const after=text.slice(index+source.length);
   const end=after.search(/[;\n]|\.(?=\s|$)/);
   return text.slice(start,index+source.length+(end<0?after.length:end));
+}
+
+/** Option labels are local to the paired assistant snapshot, never durable cart
+ * requirements. Earlier-response references need clarification rather than
+ * binding an old label to a newly presented candidate. */
+function currentOptionChoice(text: string): { label: string | null; issue: string | null } {
+  const choices=[...text.matchAll(/\bchoose\s+option\s+([a-z0-9]+)\b/gi)];
+  if(!choices.length) return {label:null,issue:null};
+  if(/\b(?:previous|earlier|prior|last|T\d+|turn\s+\d+|response\s+\d+)\b|\bfrom\s+(?:the\s+)?(?:turn|response)\b/i.test(text)) {
+    return {label:null,issue:'An earlier-response option reference cannot select a label in the current snapshot; clarify the current response choice.'};
+  }
+  if(choices.length!==1) return {label:null,issue:'Competing option choices require one explicit current-response selection.'};
+  return {label:choices[0][1].toLowerCase(),issue:null};
 }
 
 function revise(state: State, turn: ConversationTurn, first: boolean): UserPromptAnalysisResult {
@@ -72,8 +85,7 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       });
       record('requirement withdrawal');
     }
-    const choice = text.match(/\bchoose\s+option\s+([a-z0-9]+)\b/i);
-    if (choice) {state.selection=choice[1].toLowerCase();record('select option');}
+    if (currentOptionChoice(text).label) record('select option');
     const replacement = text.match(/\breplace\s+(.+?)\s+with\s+(.+?)(?:[.;]|$)/i);
     const removal = text.match(/\b(?:remove|drop|no longer need)\s+(.+?)(?:[.;]|$)/i);
     const targetText=replacement?.[1] ?? removal?.[1] ?? '';
@@ -168,17 +180,19 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
 
 export async function evaluateConversation(turns: ConversationTurn[]): Promise<ConversationEvaluation[]> {
   if(!turns.length || turns.length>MAX_CONVERSATION_TURNS || new Set(turns.map(t=>t.id)).size!==turns.length || turns.some(t=>!t.id.trim() || !t.userPrompt.trim() || t.userPrompt.length>20000 || t.llmOutput.length>50000)) throw new Error('Provide 1–20 uniquely identified turns with a user request; limits are 20,000 user and 50,000 assistant characters per turn.');
-  const state:State={items:[],requirements:[],cart:false,changes:[],unresolved:[],selection:null};
+  const state:State={items:[],requirements:[],cart:false,changes:[],unresolved:[]};
   const results:ConversationEvaluation[]=[];
   for(let index=0;index<turns.length;index++){
     const turn=turns[index];
+    const choice=currentOptionChoice(turn.userPrompt);
     const promptAnalysis=revise(state,turn,index===0);
     let snapshot=turn.llmOutput;
     const options=[...snapshot.matchAll(/\boption\s+([a-z0-9]+)\s*:/gi)];
-    let snapshotIssue:string|null=null;
-    if(state.cart && (options.length>1 || (state.selection && options.length>0))){
+    let snapshotIssue:string|null=choice.issue;
+    if(choice.issue) snapshot='';
+    else if(state.cart && (options.length>1 || (choice.label && options.length>0))){
       const uniqueLabels=new Set(options.map(m=>m[1].toLowerCase())).size===options.length;
-      const selected=state.selection && uniqueLabels?options.findIndex(m=>m[1].toLowerCase()===state.selection):-1;
+      const selected=choice.label && uniqueLabels?options.findIndex(m=>m[1].toLowerCase()===choice.label):-1;
       if(selected>=0) snapshot=snapshot.slice(options[selected].index!+options[selected][0].length,options[selected+1]?.index ?? snapshot.length);
       else {snapshot='';snapshotIssue='Multiple candidate carts are present without an explicit matching option selection.';}
     } else if(state.cart && /\b(?:options|alternatives|either|or instead)\b/i.test(snapshot)) {snapshot='';snapshotIssue='Alternative recommendations do not establish one complete combined cart.';}
