@@ -78,6 +78,32 @@ export function appliesToProduct(c: AtomicConstraint, product: ExtractedProduct)
   return !c.targetProductCategory || c.targetProductCategory === (product.category ?? productCategory(product.name));
 }
 
+/** A detached preference marker modifies its adjacent requirement, not a
+ * neighboring complete clause. Keep its exact punctuation in audit evidence. */
+function budgetPreference(text: string, start: number, end: number, local: string): { soft: boolean; evidence: string } {
+  const indicators = /\b(?:preferably|ideally|if possible|nice to have|prefer)\b/i;
+  const before = text.slice(0, start);
+  const boundaries = [...before.matchAll(/[,;\n]|\.(?=\s|$)|\band\b/gi)];
+  const boundary = boundaries.at(-1);
+  let evidenceStart = boundary ? boundary.index! + boundary[0].length : 0;
+  let leading = false;
+  if (boundary && /^[,;]$/.test(boundary[0])) {
+    const previousBoundary = boundaries.at(-2);
+    const previousStart = previousBoundary ? previousBoundary.index! + previousBoundary[0].length : 0;
+    const previous = text.slice(previousStart, boundary.index).trim();
+    if (/^(?:preferably|ideally|if possible|nice to have)$/i.test(previous)) {
+      leading = true;
+      evidenceStart = previousStart;
+    }
+  }
+  // A punctuation-separated postfix attaches only when terminal in its
+  // sentence. In "under $90, ideally, under $70", it belongs to the latter.
+  const postfix = text.slice(end).match(/^\s*(?:each|apiece|per item|per product)?\s*[,;]\s*(?:preferably|ideally|if possible|nice to have)(?=\s*(?:[.;\n]|$))/i);
+  const mandatory = /\b(?:must|required|mandatory|non-negotiable)\b/i.test(local);
+  const soft = !mandatory && (leading || indicators.test(local) || Boolean(postfix));
+  return { soft, evidence: soft ? text.slice(evidenceStart, end + (postfix?.[0].length ?? 0)).trim() : text.slice(start,end) };
+}
+
 /** Extract monetary constraints from their local clause, rather than applying one bound everywhere. */
 export function shoppingConstraints(text: string): AtomicConstraint[] {
   const request = cartRequest(text);
@@ -94,6 +120,7 @@ export function shoppingConstraints(text: string): AtomicConstraint[] {
     if (!match[2] && !match[4] && /^\s*(?:dB|kg|g|oz|cm|mm|inches|hours?|minutes?|watts?|percent|%)(?:\b|$)/i.test(tail)) continue;
     const nextClause = tail.search(/[,;\n]|\band\b|\.(?=\s|$)/i);
     const local = text.slice(clauseStart, end) + tail.slice(0, nextClause < 0 ? tail.length : nextClause);
+    const preference = budgetPreference(text, match.index!, end, local);
     const localCategory = productCategory(local);
     const perItem = /\b(?:each|apiece|per item|per product)\b/i.test(local);
     const prefix = text.slice(clauseStart, match.index);
@@ -107,7 +134,7 @@ export function shoppingConstraints(text: string): AtomicConstraint[] {
     const operator = foreignCurrency || missingCurrency || /around|approximately|about/.test(word) ? 'required' : /under|below|less than/.test(word) ? '<' : /at least/.test(word) ? '>=' : /over|above|greater/.test(word) ? '>' : /exactly/.test(word) ? 'equals' : '<=';
     constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator, expectedValue: foreignCurrency ? 'Unsupported budget currency' : missingCurrency ? 'Unresolved budget currency' : Number(match[3]), scope,
       targetProductCategory: scope === 'product' && request.isCart ? localCategory : null,
-      constraintType: /\b(?:preferably|ideally|if possible|prefer)\b/i.test(local) ? 'soft' : 'hard', polarity: 'positive', sourceText: match[0], confidence: 0.99 });
+      constraintType: preference.soft ? 'soft' : 'hard', polarity: 'positive', sourceText: preference.evidence, confidence: 0.99 });
     coveredMoneyPositions.push(match.index!);
   }
   // A known per-item cap elsewhere must not hide an unresolved hard budget.
@@ -116,7 +143,7 @@ export function shoppingConstraints(text: string): AtomicConstraint[] {
     const scope = request.isCart ? 'cart' : 'product';
     constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator: 'required', expectedValue: 'Unresolved budget', scope,
       targetProductCategory: scope === 'product' ? productCategory(clause[0]) : null,
-      constraintType: /preferably|ideally|if possible/i.test(clause[0]) ? 'soft' : 'hard', polarity: 'positive', sourceText: clause[0].trim(), confidence: 0.9 });
+      constraintType: budgetPreference(text, clause.index!, clause.index! + clause[0].length, clause[0]).soft ? 'soft' : 'hard', polarity: 'positive', sourceText: clause[0].trim(), confidence: 0.9 });
   }
   if (request.isCart) {
     constraints.push({ id: '', attribute: 'cart_items', operator: 'required', expectedValue: JSON.stringify(request.items), scope: 'cart', constraintType: 'hard', polarity: 'positive', sourceText: text, confidence: 0.98 });
