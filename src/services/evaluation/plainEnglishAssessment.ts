@@ -18,14 +18,12 @@ export function buildPlainEnglishAssessment(params: ReportExportDataParams, conv
     const subject = context ? `For turn ${index + 1}` : 'For this request';
     paragraphs.push(`${subject}, the shopper wrote ${suppliedQuote(turn.userPrompt)} ${turn.llmOutput ? `The recommendation was ${suppliedQuote(turn.llmOutput)}` : 'No recommendation was supplied.'}`);
     if (!p) { paragraphs.push('This response has not been assessed here, so no conclusion about its compliance is available.'); continue; }
-    for (const change of context?.changes.filter(c => c.turnId === turn.id) ?? []) paragraphs.push(`The shopper’s requirement revision at this point was ${suppliedQuote(change.sourceText)}. The requirements below reflect the request in effect for this response.`);
+    const changes=[...new Set(context?.changes.filter(c=>c.turnId===turn.id).map(c=>c.sourceText))];
+    if(index>0) for (const source of changes) paragraphs.push(`The shopper’s requirement revision at this point was ${suppliedQuote(source)}. The requirements below reflect the request in effect for this response.`);
     for (const issue of context?.unresolved.filter(i => i.turnId === turn.id) ?? []) paragraphs.push(`Clarification remains necessary for ${suppliedQuote(issue.sourceText)}.`);
     const findings = assessmentFindings(p);
     if (!findings.length) paragraphs.push('No acceptance requirements are available, so compliance cannot be established from this assessment.');
-    const request = (f: AssessmentFinding) => {
-      const origin = context?.turns.findIndex(t => t.id === f.requirement.sourceTurnId) ?? -1;
-      return `${suppliedQuote(f.requirement.sourceText)}${origin >= 0 ? ` (originated in turn ${origin + 1})` : ''}`;
-    };
+    const request = (f: AssessmentFinding) => suppliedQuote(f.requirement.sourceText);
     // Preserve every requirement/evidence pairing; group presentation, not records.
     for (const priority of ['hard','soft']) for (const status of ['FAIL','UNKNOWN','PASS']) {
       const groups = new Map<string,AssessmentFinding[]>();
@@ -54,6 +52,15 @@ export function buildPlainEnglishAssessment(params: ReportExportDataParams, conv
           paragraphs.push(`For ${subject}, the following ${kind} are supported by the response: ${group.map(f=>`${request(f)}${f.evidence.length ? `, supported by ${join(f.evidence.map(suppliedQuote))}` : ', with no supporting evidence excerpt recorded'}`).join('; ')}.`);
         }
       }
+    }
+    if(context) {
+      const origins=new Map<number,Set<string>>();
+      for(const c of p.promptAnalysis?.constraints??[]) {
+        const origin=context.turns.findIndex(t=>t.id===c.sourceTurnId);
+        if(origin>=0) {const sources=origins.get(origin)??new Set<string>();sources.add(c.sourceText);origins.set(origin,sources);}
+      }
+      const history=[...origins].sort((a,b)=>a[0]-b[0]).map(([origin,sources])=>`${join([...sources].map(suppliedQuote))} originated in turn ${origin+1}.`).join(' ');
+      if(history) paragraphs.push(history);
     }
     const cart = p.finalEvaluationResult.cartEvaluation;
     if (cart) paragraphs.push(`The calculated purchase total is ${cart.calculatedCartTotal == null ? 'unresolved' : `$${cart.calculatedCartTotal}`}, and the stated total is ${cart.statedCartTotal == null ? 'not established' : `$${cart.statedCartTotal}`}.${cart.totalDisagreement ? ' These totals disagree and must be reconciled before the budget can be confirmed.' : ''}`);

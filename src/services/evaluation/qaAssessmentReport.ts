@@ -78,7 +78,13 @@ export function buildQaAssessmentReport(params: ReportExportDataParams, conversa
     const assessed = new Set(sections.map(s => s.turn));
     for (const t of context.turns.filter(t => !assessed.has(t.id))) lines.push(`Turn ${t.id}: Not assessed in this report.`, 'Shopper request (verbatim):', quote(t.userPrompt), 'Recommendation (verbatim):',quote(t.llmOutput));
     lines.push('\n### Requirement revision audit trail');
-    for (const change of context.changes) lines.push(`Turn ${change.turnId}: ${change.action}. Request excerpt (verbatim):`, quote(change.sourceText));
+    const revisions=new Map<string,{turnId:string;sourceText:string;actions:Set<string>}>();
+    for(const change of context.changes) {
+      const key=JSON.stringify([change.turnId,change.sourceText]);
+      const revision=revisions.get(key)??{turnId:change.turnId,sourceText:change.sourceText,actions:new Set<string>()};
+      revision.actions.add(change.action);revisions.set(key,revision);
+    }
+    for (const change of revisions.values()) lines.push(`Turn ${change.turnId}: ${[...change.actions].join('; ')}. Request excerpt (verbatim):`, quote(change.sourceText));
     if (!context.changes.length) lines.push('No requirement revisions are recorded.');
     for (const issue of context.unresolved) lines.push(`Turn ${issue.turnId}: Clarification remains required for this request or response excerpt.`, quote(issue.sourceText));
   }

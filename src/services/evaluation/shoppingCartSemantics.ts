@@ -27,10 +27,12 @@ export function parseQuantity(raw: unknown): number | null {
   return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : null;
 }
 
+export const cartSnapshotIntro = '(?:(?:your|the|this)\\s+)?(?:(?:final|current)\\s+)?(?:shopping\\s+)?cart\\s+(?:contains|includes|has|consists\\s+of)';
+
 export function extractQuantity(text: string): { raw: string | null; amount: number | null } {
   text = text.trim();
   const explicit = text.match(/\b(?:qty|quantity)\s*[:=]?\s*([\w.-]+)/i);
-  const prefix = text.replace(/^\s*(?:\d+[.)]\s+|[-*]\s+)/, '').match(/^(?:I\s+(?:recommend|suggest)\s+|(?:get|buy|recommend|suggest)\s+)?(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s*(?:x\s+|\s+(?:pairs?\s+of\s+)?)(?=[a-z])/i);
+  const prefix = text.replace(/^\s*(?:\d+[.)]\s+|[-*]\s+)/, '').replace(new RegExp(`^${cartSnapshotIntro}\\s+`,'i'),'').match(/^(?:I\s+(?:recommend|suggest)\s+|(?:get|buy|recommend|suggest)\s+)?(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s*(?:x\s+|\s+(?:pairs?\s+of\s+)?)(?=[a-z])/i);
   const suffix = text.match(/\b(?:x\s*|quantity\s*)(-?\d+(?:\.\d+)?)(?:\s|$)/i);
   const raw = explicit?.[1] ?? prefix?.[1] ?? suffix?.[1] ?? null;
   return { raw, amount: parseQuantity(raw) };
