@@ -221,9 +221,9 @@ test('Plain-English conversation copy preserves chronology and reviewer edits; i
   await conversation(page);await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
   const editor=page.getByRole('textbox',{name:'Plain-English assessment text',exact:true});const text=await editor.inputValue();
   expect(text.indexOf('For turn 1')).toBeLessThan(text.indexOf('For turn 2'));expect(text.indexOf('For turn 2')).toBeLessThan(text.indexOf('For turn 3'));
-  expect(text).toContain('conclusion for turn 1 is that the recommendation fails');
-  expect(text).toContain('conclusion for turn 2 is that the recommendation meets');
-  expect(text).toContain('conclusion for turn 3 is that the recommendation cannot be confirmed');
+  expect(text).toContain('Overall, turn 1 fails the mandatory requirements');
+  expect(text).toContain('Overall, turn 2 meets the mandatory requirements');
+  expect(text).toContain('Overall, turn 3 cannot be confirmed');
   expect(text).toContain('requirement revision at this point');expect(text).toContain('originated in turn 2');
   const edited=text+'\n\nReviewer comments: Please clarify the third request.';await editor.fill(edited);
   await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();expect(await page.evaluate(()=>(window as any).plainCopy)).toBe(edited);
@@ -239,4 +239,65 @@ test('Plain-English single input edits prevent stale copying',async({page})=>{
   await page.locator('textarea').nth(0).fill('I need a jacket under $50.');
   await expect(page.getByRole('textbox',{name:'Plain-English assessment text',exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true})).toBeDisabled();
+});
+
+const editorialInput='I need a lightweight, breathable jacket for summer trail running under $100. It must not be waterproof or insulated.';
+const editorialOutput='I recommend the AlpineShield Heavy Winter Parka for $180. It is waterproof, heavily insulated, and designed for freezing temperatures.';
+for(const offline of [false,true]) test(`Editorial assessment groups parka failures and unknowns: ${offline?'fallback':'mock API'}`,async({page})=>{
+  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>{(window as any).plainCopy=text;}}}));
+  await single(page,editorialInput,editorialOutput,offline);
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
+  const text=await page.getByRole('textbox',{name:'Plain-English assessment text',exact:true}).inputValue();
+  expect(await page.evaluate(()=>(window as any).plainCopy)).toBe(text);
+  const paragraphs=text.split('\n\n');
+  const failure=paragraphs.filter(s=>s.startsWith('For AlpineShield')&&s.includes('mandatory requirements are not met'));
+  const unknown=paragraphs.filter(s=>s.startsWith('For AlpineShield')&&s.includes('mandatory requirements remain unconfirmed'));
+  expect(failure).toHaveLength(1);expect(unknown).toHaveLength(1);
+  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Export JSON',exact:true}).click();
+  const json=JSON.parse(await readFile((await(await pending).path())!,'utf8'));
+  expect(json.finalVerdict).toBe('FAIL');expect(json.summary.overallSeverity).toBe('HIGH');
+  const artifacts=json.rawUpstreamArtifacts;
+  expect(artifacts.verificationResult.records).toHaveLength(7);
+  for(const record of artifacts.verificationResult.records) {
+    const c=artifacts.promptAnalysis.constraints.find((c:any)=>c.id===record.constraintId);
+    const group=record.status==='FAIL'?failure[0]:unknown[0];
+    expect(group).toContain(`“${c.sourceText}”`);
+    for(const evidence of record.claimEvidence) expect(group).toContain(`“${evidence}”`);
+  }
+  expect(unknown[0]).not.toContain('is violated');expect(unknown[0]).not.toContain('is not met');
+  const actions=paragraphs.filter(s=>/^(Replace the unsuitable|Revise the recommendation|Before acceptance, confirm)/.test(s));
+  expect(actions).toHaveLength(3);
+  for(const record of artifacts.verificationResult.records) {
+    const c=artifacts.promptAnalysis.constraints.find((c:any)=>c.id===record.constraintId);
+    expect(actions.some(s=>s.includes(`“${c.sourceText}”`))).toBe(true);
+  }
+  expect(text).toContain('Overall, this response fails the mandatory requirements. Severity is high. The recommendation should not be accepted as proposed.');
+  expect(text).not.toContain('As a priority');expect(paragraphs.length).toBeLessThanOrEqual(10);
+  expect((text.replace(/“[\s\S]*?”/g,'').match(/AlpineShield Heavy Winter Parka/g)??[])).toHaveLength(2);
+  expect(text).toContain(`“${editorialInput}”`);expect(text).toContain(`“${editorialOutput}”`);
+});
+
+test('Editorial conversation copy retains grouped findings and severity before a corrected response',async({page})=>{
+  await page.route('**/api/analyze-*',()=>{throw new Error('Conversation must remain offline.');});
+  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>{(window as any).plainCopy=text;}}}));
+  await page.goto('/');await page.getByRole('button',{name:'Conversation',exact:true}).click();
+  await page.getByRole('textbox',{name:'User turn 1',exact:true}).fill(editorialInput);
+  await page.getByRole('textbox',{name:'Assistant turn 1',exact:true}).fill(editorialOutput);
+  await page.getByRole('button',{name:'Add turn',exact:true}).click();
+  await page.getByRole('textbox',{name:'User turn 2',exact:true}).fill('My budget is now under $200, but all other requirements remain.');
+  await page.getByRole('textbox',{name:'Assistant turn 2',exact:true}).fill('I recommend TrailAir Jacket for $80. It is lightweight, breathable, not waterproof, uninsulated, and designed for summer trail running.');
+  await page.getByRole('button',{name:'Evaluate conversation',exact:true}).click();await expect(page.getByTestId('conversation-verdict')).toHaveText('Turn T2: PASS');
+  await page.getByRole('button',{name:/10\. Report & Export/}).click();await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
+  const editor=page.getByRole('textbox',{name:'Plain-English assessment text',exact:true});const text=await editor.inputValue();
+  const first=text.split('For turn 1,')[1].split('For turn 2,')[0];
+  expect(first).toContain('mandatory requirements are not met');expect(first).toContain('mandatory requirements remain unconfirmed');
+  expect(first).toContain('Overall, turn 1 fails the mandatory requirements. Severity is high.');
+  expect(first.split('\n\n').filter(s=>/^(Replace the unsuitable|Revise the recommendation|Before acceptance, confirm)/.test(s))).toHaveLength(3);
+  const later=text.split('For turn 2,')[1];
+  expect(later).toContain('Overall, turn 2 meets the mandatory requirements');
+  expect(later).toContain('originated in turn 2');expect(later).toContain('originated in turn 1');
+  expect(later).not.toContain('AlpineShield');
+  expect(await page.evaluate(()=>(window as any).plainCopy)).toBe(text);
+  await editor.fill(text+'\n\nReviewer comments: Retain the earlier failure.');
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();expect(await page.evaluate(()=>(window as any).plainCopy)).toBe(await editor.inputValue());
 });

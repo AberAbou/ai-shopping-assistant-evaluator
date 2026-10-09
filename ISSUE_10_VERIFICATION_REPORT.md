@@ -46,3 +46,31 @@ Existing nonblocking Vite warnings remain: native configuration compatibility fo
 ## Safety and preview
 
 No evaluation-engine changes, paid model calls, deployment, merge, new dependencies, or changes to main, accepted tags, or the separate review repository. Credentials, `.env`, dependencies, build outputs, regression logs and browser artifacts are excluded from the commit. Restore the local preview after verification with `PORT=3101` and `DISABLE_MODEL_API=1` for manual acceptance.
+
+## Manual acceptance editorial follow-up
+
+Addresses PR review [5472431187](https://github.com/AberAbou/ai-shopping-assistant-evaluator/pull/9#pullrequestreview-5472431187), dated 2026-10-09. Only `buildPlainEnglishAssessment` presentation changes in application code; the copy UI, clipboard behavior, evaluation engines, and older exports are unchanged.
+
+Findings are grouped into ordinary paragraphs by subject, mandatory/optional priority, and outcome. Confirmed failures and unconfirmed requirements appear separately. Every source requirement and its exact associated evidence remains present; grouping does not discard records or infer missing product properties. Conflict evidence remains unconfirmed. Product findings retain their own evidence, while cart-wide findings may reference multiple products. Requirement origins, revisions, chronological outcomes, and unassessed-turn limitations remain intact.
+
+Corrective actions are consolidated into at most three paragraphs per assessed response: replace an unsuitable recommendation, respect failed budgets/exclusions, and confirm missing or contradictory evidence. Optional improvements are distinguished within the final action paragraph. Multi-product actions name each affected subject once per group rather than once per requirement. Overall conclusions are shorter and decisive, with severity taken directly from the recorded result, never forced to HIGH for other scenarios.
+
+For the manual parka example, four mandatory failures and three unverified requirements are represented in two findings paragraphs. All seven request/evidence pairings remain available, followed by a rejection with high severity and exactly three corrective recommendations. The complete report has ten ordinary paragraphs, including original request/response quotes, truthful limitations, and blank reviewer sign-off. The product name appears only twice in authored findings prose; verbatim evidence retains its original names.
+
+Final verification, with `$env:DISABLE_MODEL_API='1'`:
+
+| Command | Result |
+| --- | --- |
+| `npx tsx --test scripts/test_issue8_assessment_report.ts` | 27 passed, 0 failed |
+| `npx playwright test tests/e2e/assessment-report.spec.ts --grep 'Editorial'` | 3 passed, 0 failed |
+| `npm run test:all` | 18/18 commands passed, 0 failed; includes all 27 report tests |
+| `npm run test:e2e` | 151 Chromium tests passed, 0 failed (5.9 minutes); includes all 31 assessment UI tests |
+| `npm run lint` | Passed (`tsc --noEmit`) |
+| `npm run build` | Passed; 1696 modules transformed |
+| `git diff --check` | Passed |
+
+Three new deterministic tests check concise grouped parka output, complete requirement/evidence coverage, product-specific evidence isolation, cart-wide evidence, chronological conversation outcomes and recorded severity. Three new Chromium tests cover the parka example through mocked API and offline fallback, plus its conversation follow-up with a corrected response and reviewer edits. Existing clipboard MIME, copy accuracy, fallback, stale-input, optional-preference, and older export tests all pass.
+
+An initial new isolation assertion incorrectly forbade cart-wide evidence from mentioning multiple products. It was corrected to enforce isolation on product-scoped findings while preserving all authoritative cart evidence; no evaluation change was made. Existing assertions were updated for the revised wording while retaining outcome/evidence checks.
+
+Existing nonblocking Vite native-config and bundle-size warnings remain. Final JavaScript bundle: 630.77 kB, gzip 157.27 kB. No dependencies changed. Main, accepted tags, and the separate review repository remain untouched. PR #9 stays draft pending manual editorial acceptance; no merge, deployment, or paid model use. The offline preview is restored on port 3101 after verification.
