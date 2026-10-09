@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 const source = readFileSync(new URL('../src/services/evaluation/recommendationEngine.ts', import.meta.url), 'utf8');
-const match = source.match(/export function describePriceBoundary\([\s\S]*?\n}\n/);
+const match = source.replaceAll(String.fromCharCode(13), "").match(/export function describePriceBoundary\([\s\S]*?\n}\n/);
 assert.ok(match, 'price-boundary helper exists');
 const describe = runInNewContext(`${match[0].replace('export ', '').replace('operator: string | undefined, sourceText: string, amount: string', 'operator, sourceText, amount')}\ndescribePriceBoundary`, {});
 const cases = [

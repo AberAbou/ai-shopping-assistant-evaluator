@@ -74,13 +74,19 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
     if(index<0) request.items.push({...item,category:item.category});
     else request.items[index]={...item,category:item.category};
   }
-  const confirmationOnly=/^(?:please\s+)?(?:confirm|restate|summari[sz]e|show)\s+(?:(?:the|my|our)\s+)?(?:(?:final|current|same)\s+)?(?:shopping\s+)?cart(?:\s*[,;:]?\s*(?:and\s+)?(?:quantities|(?:individual|unit)\s+prices|prices|(?:grand\s+)?total))*[.!?\s]*$/i.test(text);
-  const retentionPattern=/^(?:please\s+)?keep\s+(?:the\s+)?same\s+(?:products?|items?|cart|quantities)(?:\s+and\s+(?:products?|items?|quantities))*[.!\s]*$/i;
+  const confirmationWords = /\b(?:confirm|restate|summari[sz]e|show|review|check)\b/i.test(text);
+  const cartKeywords = /\b(?:cart|order|quantities|prices|total|items)\b/i.test(text);
+  const confirmationOnly = /^(?:please\s+)?(?:confirm|restate|summari[sz]e|show)\s+(?:(?:the|my|our)\s+)?(?:(?:final|current|same)\s+)?(?:shopping\s+)?cart(?:\s*[,;:]?\s*(?:and\s+)?(?:quantities|(?:individual|unit)\s+prices|prices|(?:grand\s+)?total))*[.!?\s]*$/i.test(text)
+    || (confirmationWords && cartKeywords && !/\b(?:replace|remove|drop|add\b|increase\b|decrease\b|instead\b)\b/i.test(text)
+        && overrides.length === 0
+        && !/[\d$€£]/i.test(text.replace(/\b(?:quantities|prices|total|unit prices|individual prices)\b/gi, '')));
+  const retentionPattern = /^(?:please\s+)?keep\s+(?:the\s+)?same\s+(?:products?|items?|cart|quantities)(?:\s+and\s+(?:products?|items?|quantities))*[.!\s]*$/i;
+  const retentionAllPattern = /\bkeep\s+(?:all\s+(?:my\s+)?(?:latest\s+)?requirements|everything|the\s+same\s+cart)\s+unchanged\b/i;
   const retainedCategory = (clause:string) => state.items.some(item=>{
     const category=categoryPatterns.find(c=>c.category===item.category)!;
     return new RegExp(`^(?:please\\s+)?keep\\s+(?:the\\s+)?(?:same\\s+)?(?:running\\s+)?${category.pattern.source}(?:\\s+and\\s+(?:the\\s+)?original\\s+per-product\\s+budget\\s+unchanged)?[.!\\s]*$`,'i').test(clause);
   });
-  const retentionOnly=retentionPattern.test(text);
+  const retentionOnly = retentionPattern.test(text) || retentionAllPattern.test(text);
   const clarification = /\b(?:I mean|I meant|to clarify)\b/i.test(text);
   const withdrawal=text.match(/\b(?:allow|no longer require|remove requirement for)\s+(leather|fragrance|waterproof|breathable|running|hiking)\b/i);
   const operation=/\b(?:replace\s+.+\s+with|remove|drop|no longer need|add)\b/i.test(text);
@@ -164,8 +170,9 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       // Category descriptors in a count update or retention/confirmation clause
       // refer to existing products; they do not revise their suitability.
       const referenceClause=local.trim().replace(/[.!]$/,'');
-      if(confirmationOnly || retentionOnly || retentionPattern.test(referenceClause)
+      if(confirmationOnly || retentionOnly || retentionPattern.test(referenceClause) || retentionAllPattern.test(referenceClause)
         || (!first&&state.requirements.some(old=>budgetAttributes.includes(old.attribute))&&budgetAttributes.includes(c.attribute)&&/\b(?:keep|retain|leave)\b/i.test(local)&&/\b(?:original|same|unchanged)\b/i.test(local)&&!/[\d$€£]|\b(?:under|over|below|above|at most|at least)\b/i.test(local))
+        || (c.expectedValue === 'Unresolved budget' && /\b(?:unchanged|same|as\s+before|keep|retain|leave)\b/i.test(text))
         || (c.attribute==='use_case'&&(retainedCategory(referenceClause)||overrides.some(i=>i.sourceText.toLowerCase()===referenceClause.toLowerCase())))) continue;
       if(withdrawal && String(c.expectedValue).toLowerCase().includes(withdrawal[1].toLowerCase())) continue;
       if (!first && budgetAttributes.includes(c.attribute) && !c.targetProductCategory && /\b(?:total|cart|overall|combined|budget)\b/i.test(local) && !/\b(?:each|per item|per product)\b/i.test(local) && state.cart) {

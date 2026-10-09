@@ -29,5 +29,6 @@ run('scripts/test_checkpoint14c3_conversation.ts', [tsx, '--test', 'scripts/test
 run('scripts/test_issue6_negated_properties.ts', [tsx, '--test', 'scripts/test_issue6_negated_properties.ts']);
 run('scripts/test_issue8_assessment_report.ts', [tsx, '--test', 'scripts/test_issue8_assessment_report.ts']);
 run('scripts/test_issue11_conversation.ts', [tsx, '--test', 'scripts/test_issue11_conversation.ts']);
-console.log(`All-suite runner: ${19 - failures}/19 commands passed, ${failures} failed.`);
+run('scripts/test_five_turn_acceptance.ts', [tsx, '--test', 'scripts/test_five_turn_acceptance.ts']);
+console.log(`All-suite runner: ${20 - failures}/20 commands passed, ${failures} failed.`);
 process.exitCode = failures ? 1 : 0;

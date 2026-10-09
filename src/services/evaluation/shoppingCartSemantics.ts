@@ -52,12 +52,38 @@ export function cartRequest(text: string): { isCart: boolean; items: RequestedCa
     for (const entry of categoryPatterns) {
       const match = clause.match(entry.pattern);
       if (!match) continue;
-      const before = clause.slice(Math.max(0, (match.index ?? 0) - 55), match.index);
-      const qty = before.match(/(-?\d+(?:\.\d+)?|one|two|three|four|five|six|a|an)\s+(?:pairs?\s+of\s+)?(?:(?!and\b|or\b|plus\b|with\b)[a-z-]+,?\s+){0,4}$/i);
+      const matchIndex = match.index ?? 0;
+      // Only examine text between any preceding category in this clause and this match
+      let relevantBefore = clause.slice(0, matchIndex);
+      for (const other of categoryPatterns) {
+        if (other.category === entry.category) continue;
+        const otherMatches = [...clause.slice(0, matchIndex).matchAll(new RegExp(other.pattern.source, 'gi'))];
+        if (otherMatches.length > 0) {
+          const lastOther = otherMatches[otherMatches.length - 1];
+          const otherEnd = (lastOther.index ?? 0) + lastOther[0].length;
+          if (otherEnd > 0 && otherEnd < matchIndex) {
+            const candidate = clause.slice(otherEnd, matchIndex);
+            if (candidate.length < relevantBefore.length) {
+              relevantBefore = candidate;
+            }
+          }
+        }
+      }
+      const before = relevantBefore.slice(Math.max(0, relevantBefore.length - 55));
+      const qty = before.match(/\b(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\b\s+(?:pairs?\s+of\s+)?(?:(?!and\b|or\b|plus\b|with\b)[a-z-]+,?\s+){0,4}$/i);
       clauseItems.push({ category: entry.category, quantity: parseQuantity(qty?.[1]), sourceText: qty ? qty[0] + match[0] : match[0], hasInvalidQuantity: Boolean(qty && parseQuantity(qty[1]) === null) });
     }
     joinedRequest ||= clauseItems.length > 1 && /\band\b|\bplus\b|,/i.test(clause);
-    for (const item of clauseItems) if (!items.some(i => i.category === item.category)) items.push(item);
+    for (const item of clauseItems) {
+      const existing = items.find(i => i.category === item.category);
+      if (!existing) {
+        items.push(item);
+      } else if (existing.quantity === null && item.quantity !== null) {
+        existing.quantity = item.quantity;
+        existing.sourceText = item.sourceText;
+        existing.hasInvalidQuantity = item.hasInvalidQuantity;
+      }
+    }
   }
   // Choices of attributes (red or blue) and optional feature clauses must not
   // veto an explicit basket. A choice marker must actually involve items.
@@ -125,24 +151,61 @@ export function shoppingConstraints(text: string): AtomicConstraint[] {
     const local = text.slice(clauseStart, end) + tail.slice(0, nextClause < 0 ? tail.length : nextClause);
     const preference = budgetPreference(text, match.index!, end, local);
     const localCategory = productCategory(local);
-    const perItem = /\b(?:each|apiece|per item|per product)\b/i.test(local);
+    const perItem = /\b(?:each|apiece|per item|per product|per pair|per unit|a pair)\b/i.test(local) || /\b(?:each|apiece|per item|per product|per pair|per unit|a pair)\b/i.test(tail.slice(0, 30));
     const prefix = text.slice(clauseStart, match.index);
     const followingItems = tail.split(/[;\n]|\.(?=\s|$)/)[0];
-    const beforeItemGroup = !productCategory(prefix) && /\bfor\b/i.test(followingItems) && categoryPatterns.filter(c => c.pattern.test(followingItems)).length > 1;
-    const total = beforeItemGroup || /\b(?:total|combined|overall|cart|together|all items|both)\b/i.test(local);
-    const scope = request.isCart && !perItem && (total || !localCategory) ? 'cart' : 'product';
+    const followingForItems = followingItems.split(/\band\s+(?:strictly\s+under|under|below|less\s+than|at\s+most|up\s+to|at\s+least|over|above|priced|costing|budget)\b/i)[0];
+    const beforeItemGroup = !productCategory(prefix) && /\bfor\b/i.test(followingForItems) && categoryPatterns.filter(c => c.pattern.test(followingForItems)).length > 1;
+
+    // Explicit cart-level budget keywords
+    const isCartBudgetMarker = beforeItemGroup
+      || /\b(?:total\s+cart\s+budget|cart\s+budget|total\s+budget|overall\s+budget|combined\s+budget|total\s+cost|cart\s+total|in\s+total|for\s+both|for\s+all|all\s+together|entire\s+order)\b/i.test(local)
+      || /\b(?:total\s+cart\s+budget|cart\s+budget|total\s+budget|overall\s+budget|combined\s+budget|total\s+cost)\b/i.test(text.slice(clauseStart, end));
+
+    // Resolve target category:
+    // 1. Direct local category
+    let targetCategory = isCartBudgetMarker ? null : productCategory(local);
+    // 2. If not found locally, look backwards in the sentence up to match.index
+    if (!targetCategory && !isCartBudgetMarker) {
+      const sentenceStart = Math.max(before.lastIndexOf('. '), before.lastIndexOf(';\n'), before.lastIndexOf(';'), before.lastIndexOf('\n')) + 1;
+      const sentenceBefore = text.slice(sentenceStart, match.index);
+      let lastCatEnd = -1;
+      for (const entry of categoryPatterns) {
+        const catMatches = [...sentenceBefore.matchAll(new RegExp(entry.pattern.source, 'gi'))];
+        if (catMatches.length > 0) {
+          const lastM = catMatches[catMatches.length - 1];
+          const catEnd = lastM.index! + lastM[0].length;
+          if (catEnd > lastCatEnd) {
+            lastCatEnd = catEnd;
+            targetCategory = entry.category;
+          }
+        }
+      }
+    }
+    // 3. If still not found, look forwards in tail before next item boundary (only if single category)
+    if (!targetCategory && !isCartBudgetMarker) {
+      const tailSegment = tail.split(/[.;\n]|\band\b|\bplus\b/i)[0];
+      const categoriesInTail = categoryPatterns.filter(c => c.pattern.test(tailSegment));
+      if (categoriesInTail.length === 1) {
+        targetCategory = categoriesInTail[0].category;
+      }
+    }
+
+    const total = beforeItemGroup || isCartBudgetMarker || (!targetCategory && /\b(?:total|combined|overall|cart|together|all items|both)\b/i.test(local));
+    const scope = request.isCart && !perItem && (isCartBudgetMarker || (!targetCategory && total) || (!targetCategory && !productCategory(text))) ? 'cart' : (targetCategory ? 'product' : (request.isCart && !perItem ? 'cart' : 'product'));
     const word = match[1].toLowerCase().replace(/\s+/g, ' ');
     const foreignCurrency = Boolean(match[2] && match[2] !== '$') || Boolean(match[4] && !/^(USD|dollars)$/i.test(match[4]));
     const missingCurrency = !match[2] && !match[4];
     const operator = foreignCurrency || missingCurrency || /around|approximately|about/.test(word) ? 'required' : /under|below|less than/.test(word) ? '<' : /at least/.test(word) ? '>=' : /over|above|greater/.test(word) ? '>' : /exactly/.test(word) ? 'equals' : '<=';
     constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator, expectedValue: foreignCurrency ? 'Unsupported budget currency' : missingCurrency ? 'Unresolved budget currency' : Number(match[3]), scope,
-      targetProductCategory: scope === 'product' && request.isCart ? localCategory : null,
+      targetProductCategory: scope === 'product' && request.isCart ? targetCategory : null,
       constraintType: preference.soft ? 'soft' : 'hard', polarity: 'positive', sourceText: preference.evidence, confidence: 0.99 });
     coveredMoneyPositions.push(match.index!);
   }
   // A known per-item cap elsewhere must not hide an unresolved hard budget.
   for (const clause of text.matchAll(/(?:[^.;\n]|\.(?!\s|$))+/g)) {
     if (!/\bbudget\b/i.test(clause[0]) || coveredMoneyPositions.some(index => index >= clause.index! && index < clause.index! + clause[0].length)) continue;
+    if (/\b(?:unchanged|same|as\s+before|keep|retain|leave)\b/i.test(clause[0])) continue;
     const scope = request.isCart ? 'cart' : 'product';
     constraints.push({ id: '', attribute: scope === 'cart' ? 'cart_total_price' : 'price', operator: 'required', expectedValue: 'Unresolved budget', scope,
       targetProductCategory: scope === 'product' ? productCategory(clause[0]) : null,
