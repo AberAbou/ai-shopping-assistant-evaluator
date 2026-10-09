@@ -24,6 +24,19 @@ import {
   FinalEvaluationResult,
 } from '../../types/evaluation';
 
+function conversationAudit(params: ReportExportDataParams): string {
+  const context=params.inputs.conversation;
+  if(!context) return '';
+  return '\n\nCONVERSATION AUDIT\n' + [
+    `Evaluated turn: ${context.evaluatedTurnId}; assistant responses are complete snapshots. Earlier assistant evidence is not reused.`,
+    ...context.turns.map(t=>`Turn ${t.id}\nUser: ${t.userPrompt}\nAssistant: ${t.llmOutput}`),
+    'Active requirement provenance:',
+    ...(params.promptAnalysis?.constraints ?? []).map(c=>`${c.id}: ${c.sourceTurnId ?? 'unknown'} — ${c.sourceText}`),
+    'User revision history:', ...context.changes.map(c=>`${c.turnId}: ${c.action} — ${c.sourceText}`),
+    ...context.unresolved.map(i=>`Unresolved (${i.turnId}): ${i.reason}`),
+  ].join('\n');
+}
+
 export interface ReportExportDataParams {
   reportId?: string;
   inputs: EvaluatorInput;
@@ -266,7 +279,7 @@ export function buildExportJsonPayload(params: ReportExportDataParams): ExportJs
       checkpoint: 'Checkpoint 11A (Claim Readability & Export v1.2)',
       generatedAt: finalEvaluationResult.evaluatedAt,
       evaluatorVersion: '1.0.0-auditable',
-      inputContract: 'EXACTLY_TWO_INPUTS',
+      inputContract: inputs.conversation ? 'ORDERED_CONVERSATION_TURNS' : 'EXACTLY_TWO_INPUTS',
       externalTruthVerificationConducted: false,
     },
     inputs,
@@ -414,7 +427,7 @@ export function buildExportMarkdownReport(params: ReportExportDataParams): strin
     `- The evaluator operates exclusively on the provided User Prompt and LLM Output. External catalog lookup was not conducted.`,
   ].join('\n');
 
-  return md;
+  return md + conversationAudit(params);
 }
 
 export interface ProfessionalReportData {
@@ -687,7 +700,7 @@ export function buildConciseProfessionalReport(params: ReportExportDataParams): 
     lines.push(`• ${al}`);
   }
 
-  const plainText = lines.join('\n');
+  const plainText = lines.join('\n') + conversationAudit(params);
 
   return {
     title: 'Shopping Assistant Response Evaluation',
@@ -1015,7 +1028,7 @@ export function buildDetailedProfessionalReport(params: ReportExportDataParams):
     lines.push(`• ${al}`);
   }
 
-  const plainText = lines.join('\n');
+  const plainText = lines.join('\n') + conversationAudit(params);
 
   return {
     title: 'Shopping Assistant Response Evaluation — Detailed Audit',

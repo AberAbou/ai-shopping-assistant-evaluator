@@ -8,6 +8,7 @@ import { AlertTriangle, AlertOctagon, RotateCw, CheckCircle2 } from 'lucide-reac
 import { Header } from './components/Header';
 import { InputArea, MAX_USER_PROMPT_LENGTH, MAX_LLM_OUTPUT_LENGTH } from './components/InputArea';
 import { ResultsDashboard } from './components/ResultsDashboard';
+import { ConversationWorkspace } from './components/ConversationWorkspace';
 import { QARegressionModal } from './components/QARegressionModal';
 import { REGRESSION_SCENARIOS, RegressionScenario } from './fixtures/regressionScenarios';
 import {
@@ -41,8 +42,9 @@ export interface EvaluationErrorState {
 }
 
 export default function App() {
+  const [conversationMode,setConversationMode]=useState(false);
   // CRITICAL PRODUCT REQUIREMENT:
-  // Exactly two inputs provided by the human evaluator.
+  // The default single-prompt workflow keeps exactly two evaluator inputs.
   // Original strings are strictly preserved across evaluations, reports, and retries.
   const [userPrompt, setUserPrompt] = useState<string>('');
   const [llmOutput, setLlmOutput] = useState<string>('');
@@ -92,6 +94,7 @@ export default function App() {
 
   // Canonical Scenario Loader: Populates ONLY the two allowed inputs (Scenarios A–F)
   const handleLoadScenario = (scenario: RegressionScenario) => {
+    setConversationMode(false);
     // Invalidate any in-flight runs
     activeRunIdRef.current++;
     setIsEvaluating(false);
@@ -135,6 +138,7 @@ export default function App() {
   };
 
   const handleClear = () => {
+    setConversationMode(false);
     activeRunIdRef.current++;
     setIsEvaluating(false);
     setUserPrompt('');
@@ -375,6 +379,11 @@ export default function App() {
       {/* Main Workspace Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         
+        <nav aria-label="Evaluation mode" className="flex gap-4">
+          <button type="button" disabled={isEvaluating} aria-pressed={!conversationMode} onClick={()=>setConversationMode(false)}>Single prompt</button>
+          <button type="button" disabled={isEvaluating} aria-pressed={conversationMode} onClick={()=>setConversationMode(true)}>Conversation</button>
+        </nav>
+        {conversationMode ? <ConversationWorkspace /> : <>
         {/* Exactly Two Evaluator Inputs Area */}
         <InputArea
           userPrompt={userPrompt}
@@ -485,6 +494,7 @@ export default function App() {
           isInputsModified={isInputsModified}
         />
 
+        </>}
       </main>
 
       {/* Automated QA & Regression Test Suite Modal */}
@@ -503,7 +513,7 @@ export default function App() {
             <span>Checkpoint 14: V1 Release Hardening Active</span>
           </div>
           <div className="flex items-center gap-4 text-[11px] text-slate-400 flex-wrap">
-            <span>Input Contract: User Prompt + LLM Output Only</span>
+            <span>{conversationMode ? 'Input Contract: Ordered User + Assistant Turns' : 'Input Contract: User Prompt + LLM Output Only'}</span>
             <span>·</span>
             <span>Verdict: PASS / FAIL / INDETERMINATE · Hard Gate Authoritative · UNKNOWN ≠ FAIL · UNVERIFIED ≠ FALSE</span>
           </div>
