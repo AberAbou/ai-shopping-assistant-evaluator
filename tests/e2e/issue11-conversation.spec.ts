@@ -1,6 +1,34 @@
 import { test,expect,type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { issue11Turns } from '../fixtures/issue11Conversation';
+import { jacketReplacementTurns } from '../fixtures/jacketReplacementConversation';
+
+test('replacement: three-turn jacket changes waterproof polarity while preserving unrelated requirements',async({page})=>{
+  await evaluate(page,jacketReplacementTurns);
+  for(let i=0;i<3;i++) {
+    await page.getByRole('combobox',{name:'Evaluated turn'}).selectOption(String(i));
+    await expect(page.getByTestId('conversation-verdict')).toHaveText(`Turn T${i+1}: PASS`);
+    const json=await exported(page);const c=json.rawUpstreamArtifacts.promptAnalysis.constraints;
+    expect(c.filter((c:any)=>c.attribute==='water_resistance').map((c:any)=>[c.polarity,c.sourceTurnId])).toEqual([[i?'negative':'positive',i?'T2':'T1']]);
+    for(const attribute of ['weight','use_case','cart_total_price']) expect(c.find((c:any)=>c.attribute===attribute).sourceTurnId).toBe('T1');
+    expect(c.find((c:any)=>c.attribute==='quantity'&&c.targetProductCategory==='shorts').sourceTurnId).toBe('T1');
+    expect(json.rawUpstreamArtifacts.verificationResult.records.every((v:any)=>v.status==='PASS')).toBe(true);
+    expect(json.cartEvaluation.calculatedCartTotal).toBe(90);
+  }
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
+  const text=await page.getByRole('textbox',{name:'Plain-English assessment text',exact:true}).inputValue();
+  expect(await page.evaluate(()=>(window as any).plainCopy)).toBe(text);
+  for(let i=1;i<=3;i++) expect(text).toContain(`Overall, turn ${i} meets the mandatory requirements`);
+  expect(text.split('For turn 3,')[1]).toContain('non-waterproof');
+});
+
+for(const [feature,result] of [['waterproof','FAIL'],['blue','INDETERMINATE'],['non-waterproof waterproof','INDETERMINATE']] as const) test(`replacement: current jacket evidence ${feature}`,async({page})=>{
+  const turns=jacketReplacementTurns.map(t=>({...t}));turns[2].llmOutput=turns[2].llmOutput.replace('non-waterproof',feature);
+  await evaluate(page,turns);
+  await expect(page.getByTestId('conversation-verdict')).toHaveText(`Turn T3: ${result}`);
+  const json=await exported(page);
+  expect(json.rawUpstreamArtifacts.verificationResult.records.filter((v:any)=>v.constraintAttribute!=='water_resistance').every((v:any)=>v.status==='PASS')).toBe(true);
+});
 
 async function evaluate(page:Page,turns=issue11Turns) {
   await page.route('**/api/analyze-*',()=>{throw new Error('Issue 11 conversation must remain offline.');});

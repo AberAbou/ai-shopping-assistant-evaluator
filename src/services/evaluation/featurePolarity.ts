@@ -24,13 +24,16 @@ export function isCanonicalFeature(attribute: string, value: unknown): boolean {
 
 /** Raw shopper evidence overrides truncated or incorrectly polarized API fields. */
 export function reconcileFeatureConstraints(result: UserPromptAnalysisResult, text: string): UserPromptAnalysisResult {
-  const assertions = featureAssertions(text);
-  if (!assertions.length) return result;
+  // The left side names the superseded item, rather than requesting its features.
+  const replacements = [...text.matchAll(/\breplace\s+([^.;\n]+?)\s+with\s+/gi)];
+  const assertions = featureAssertions(text).filter(a => !replacements.some(m => a.index >= m.index! && a.index < m.index! + m[0].length));
+  if (!assertions.length && !replacements.length) return result;
   const constraints = result.constraints.filter(c => !isCanonicalFeature(c.attribute, c.expectedValue));
   const features: AtomicConstraint[] = [];
   for (const a of assertions) {
     const before = text.slice(0, a.index);
-    const start = Math.max(before.lastIndexOf('.'), before.lastIndexOf(';'), before.lastIndexOf('\n')) + 1;
+    const replacement = replacements.filter(m => m.index! + m[0].length <= a.index).at(-1);
+    const start = Math.max(before.lastIndexOf('.') + 1, before.lastIndexOf(';') + 1, before.lastIndexOf('\n') + 1, replacement ? replacement.index! + replacement[0].length : 0);
     const local = text.slice(start, a.index + a.sourceText.length);
     const soft = /\b(?:prefer|preferably|ideally|optional|if possible|nice to have|would like)\b/i.test(local) && !/\b(?:must|required|need)\b/i.test(local);
     // Retain the actual governing clause so repeated feature words on different

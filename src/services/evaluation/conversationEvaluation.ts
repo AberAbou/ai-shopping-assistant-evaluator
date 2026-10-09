@@ -50,9 +50,13 @@ function currentOptionChoice(text: string): { label: string | null; issue: strin
 
 function revise(state: State, turn: ConversationTurn, first: boolean): UserPromptAnalysisResult {
   const text = turn.userPrompt;
+  const replacement = text.match(/\breplace\s+([^.;\n]+?)\s+with\s+(.+?)(?:[.;]|$)/i);
   const previousItems=state.items;
   const wasCart=state.cart;
-  const analysis = analyzePrompt(text);
+  // Extract requirements from the replacement, not the old item's description.
+  const replacementPrefix = replacement?.[0].match(/^replace\s+.+?\s+with\s+/i)?.[0];
+  const analysisText = replacementPrefix ? text.slice(0,replacement!.index) + text.slice(replacement!.index! + replacementPrefix.length) : text;
+  const analysis = analyzePrompt(analysisText);
   const request = cartRequest(text);
   const record = (action: string) => {
     if(!state.changes.some(c=>c.turnId===turn.id&&c.action===action&&c.sourceText===text)) state.changes.push({ turnId: turn.id, action, sourceText: text });
@@ -104,7 +108,6 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       record('requirement withdrawal');
     }
     if (currentOptionChoice(text).label) record('select option');
-    const replacement = text.match(/\breplace\s+(.+?)\s+with\s+(.+?)(?:[.;]|$)/i);
     const removal = text.match(/\b(?:remove|drop|no longer need)\s+(.+?)(?:[.;]|$)/i);
     const targetText=replacement?.[1] ?? removal?.[1] ?? '';
     const targetCategory=productCategory(targetText);
@@ -119,7 +122,7 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
     }
     if (removeCategory) {
       state.items = state.items.filter(i=>i.category!==removeCategory);
-      state.requirements = state.requirements.filter(c=>c.targetProductCategory!==removeCategory);
+      if(!replacement || productCategory(replacement[2])!==removeCategory) state.requirements = state.requirements.filter(c=>c.targetProductCategory!==removeCategory);
       record(replacement?'replacement':'removal');
     }
     const incoming = replacement ? (removeCategory ? cartRequest(replacement[2]).items : []) : request.items.filter(i=>i.category!==targetCategory);
@@ -171,6 +174,15 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       // A new optional preference never silently withdraws a mandatory limit.
       // An explicit "replace"/"instead" may deliberately change its strength.
       const explicitReplacement=/\b(?:instead|replace|no longer mandatory)\b/i.test(text);
+      if(replacement && removeCategory && c.targetProductCategory && c.attribute!=='price' && c.scope!=='cart') {
+        // Explicit replacement requirements supersede the same property, including
+        // opposite polarity; retain global requirements for the other products.
+        state.requirements=state.requirements.flatMap(old=>{
+          if(old.sourceTurnId===turn.id || old.attribute!==c.attribute || (old.targetProductCategory && old.targetProductCategory!==c.targetProductCategory)) return [old];
+          if(!old.targetProductCategory && state.items.some(i=>i.category!==c.targetProductCategory)) return state.items.filter(i=>i.category!==c.targetProductCategory).map(i=>({...old,targetProductCategory:i.category}));
+          return [];
+        });
+      }
       state.requirements=state.requirements.filter(old=>old.sourceTurnId===turn.id || key(old)!==key(c) || (!explicitReplacement && old.constraintType!==c.constraintType));
       state.requirements.push(c);
       record(matches.length?'requirement revision':'requirement addition');

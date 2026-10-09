@@ -6,6 +6,73 @@ import { analyzeLlmOutputDeterministically } from '../src/services/evaluation/fa
 import { reconcileClaimCart } from '../src/services/evaluation/shoppingCartSemantics';
 import { buildPlainEnglishAssessment } from '../src/services/evaluation/plainEnglishAssessment';
 import { buildQaAssessmentReport, assessmentFindings } from '../src/services/evaluation/qaAssessmentReport';
+import { analyzeUserPromptDeterministically as analyzePrompt } from '../src/services/evaluation/fallbackPromptAnalyzer';
+import { normalizePromptAnalysis } from '../src/services/evaluation/promptAnalysisNormalizer';
+import { jacketReplacementTurns as replacementTurns } from '../tests/fixtures/jacketReplacementConversation';
+
+test('replacement: old description is referential and non-waterproof is a prohibition in fallback and API normalization',()=>{
+  const text=replacementTurns[1].userPrompt;
+  const p=analyzePrompt(text);
+  const raw={...p,constraints:[...p.constraints,{id:'C99',attribute:'water_resistance',operator:'required',expectedValue:'waterproof',polarity:'positive',constraintType:'hard',sourceText:'waterproof'}]};
+  for(const analysis of [p,normalizePromptAnalysis(raw,text)]) {
+    assert.deepEqual(analysis.constraints.filter(c=>c.attribute==='water_resistance').map(c=>[c.polarity,c.operator]),[['negative','prohibited']]);
+    assert.ok(!analysis.intent.desiredAttributes.includes('waterproof'));
+    assert.ok(analysis.intent.explicitExclusions.includes('waterproof'));
+  }
+});
+
+test('replacement: three-turn jacket polarity change preserves budget, shorts, weight and collective suitability',async()=>{
+  const results=await evaluateConversation(replacementTurns);
+
+  assert.deepEqual(results.map(r=>r.finalEvaluationResult.finalVerdict),['PASS','PASS','PASS']);
+  for(const [i,r] of results.entries()) {
+    const c=r.promptAnalysis!.constraints;
+    assert.deepEqual(c.filter(c=>c.attribute==='water_resistance').map(c=>[c.polarity,c.sourceTurnId]),[[i?'negative':'positive',i?'T2':'T1']]);
+    for(const attribute of ['weight','use_case','cart_total_price']) assert.equal(c.find(c=>c.attribute===attribute)!.sourceTurnId,'T1');
+    assert.equal(c.find(c=>c.attribute==='quantity'&&c.targetProductCategory==='shorts')!.sourceTurnId,'T1');
+    assert.equal(r.finalEvaluationResult.cartEvaluation!.calculatedCartTotal,90);
+    assert.ok(r.verificationResult!.records.every(v=>v.status==='PASS'));
+    assert.equal(r.inputs.conversation.unresolved.length,0);
+  }
+  assert.deepEqual(results[2].promptAnalysis!.constraints,results[1].promptAnalysis!.constraints);
+});
+
+test('replacement: a product revision does not withdraw a collective feature from other products',async()=>{
+  const turns=replacementTurns.map(t=>({...t}));
+  turns[0].userPrompt='I need 1 jacket and 1 pair of running shorts. My total budget must be under $120. All items must be waterproof and suitable for running.';
+  turns[0].llmOutput=turns[0].llmOutput.replace('RunFit running shorts','waterproof RunFit running shorts');
+  for(const i of [1,2]) turns[i].llmOutput=turns[i].llmOutput.replace('RunFit running shorts','waterproof RunFit running shorts');
+  const results=await evaluateConversation(turns);
+  assert.deepEqual(results.map(r=>r.finalEvaluationResult.finalVerdict),['PASS','PASS','PASS']);
+  assert.deepEqual(results[2].promptAnalysis!.constraints.filter(c=>c.attribute==='water_resistance').map(c=>[c.targetProductCategory,c.polarity,c.sourceTurnId]),[['shorts','positive','T1'],['jacket','negative','T2']]);
+  turns[2].llmOutput=turns[2].llmOutput.replace('waterproof RunFit','non-waterproof RunFit');
+  const r=(await evaluateConversation(turns))[2];
+  assert.equal(r.finalEvaluationResult.finalVerdict,'FAIL');
+  assert.deepEqual(r.verificationResult!.records.filter(v=>v.status!=='PASS').map(v=>[v.constraintAttribute,v.productId]),[['water_resistance','P2']]);
+});
+
+test('replacement: single jacket retains budget, activity and weight, and supports reversal of feature polarity',async()=>{
+  const turns=[
+    {id:'T1',userPrompt:'I need a lightweight waterproof jacket for running under $100.',llmOutput:'I recommend the RainFit jacket for $80. It is lightweight, waterproof and designed for running.'},
+    {id:'T2',userPrompt:'Replace the waterproof jacket with a breathable, non-waterproof jacket.',llmOutput:'I recommend the TrailAir jacket for $80. It is lightweight, breathable, non-waterproof and designed for running.'},
+    {id:'T3',userPrompt:'Keep the same products and quantities.',llmOutput:'I recommend the TrailAir jacket for $80. It is lightweight, breathable, non-waterproof and designed for running.'},
+  ];
+  const results=await evaluateConversation(turns);
+  assert.deepEqual(results.map(r=>r.finalEvaluationResult.finalVerdict),['PASS','PASS','PASS']);
+  const c=results[2].promptAnalysis!.constraints;
+  for(const attribute of ['price','use_case','weight']) assert.equal(c.find(c=>c.attribute===attribute)!.sourceTurnId,'T1');
+  assert.deepEqual(c.filter(c=>c.attribute==='water_resistance').map(c=>[c.polarity,c.sourceTurnId]),[['negative','T2']]);
+  const reversed=await evaluateConversation([...turns,{id:'T4',userPrompt:'Replace the non-waterproof jacket with a waterproof jacket.',llmOutput:'I recommend the RainFit jacket for $80. It is lightweight, breathable, waterproof and designed for running.'}]);
+  assert.equal(reversed[3].finalEvaluationResult.finalVerdict,'PASS');
+  assert.deepEqual(reversed[3].promptAnalysis!.constraints.filter(c=>c.attribute==='water_resistance').map(c=>[c.polarity,c.sourceTurnId]),[['positive','T4']]);
+});
+
+for(const [statement,expected] of [['waterproof','FAIL'],['blue','INDETERMINATE'],['non-waterproof waterproof','INDETERMINATE']] as const) test(`replacement: final snapshot ${statement}`,async()=>{
+  const turns=replacementTurns.map(t=>({...t}));turns[2].llmOutput=turns[2].llmOutput.replace('non-waterproof',statement);
+  const r=(await evaluateConversation(turns))[2];
+  assert.equal(r.finalEvaluationResult.finalVerdict,expected);
+  assert.ok(r.verificationResult!.records.filter(v=>v.constraintAttribute!=='water_resistance').every(v=>v.status==='PASS'));
+});
 
 test('Issue 11: exact four-turn acceptance transcript',async()=>{
   const results=await evaluateConversation(issue11Turns);
