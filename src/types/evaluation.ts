@@ -46,7 +46,7 @@ export type ConstraintOperator =
  */
 export interface AtomicConstraint {
   id: string;
-  attribute: string; // e.g. "price", "category", "weight", "breathability", "material", "color", "size"
+  attribute: string; // e.g. "price", "category", "weight", "breathability", "material", "color", "size", "cart_total_price"
   operator: ConstraintOperator;
   expectedValue: string | number | boolean;
   constraintType: ConstraintType; // 'hard' vs 'soft'
@@ -54,6 +54,8 @@ export interface AtomicConstraint {
   sourceText: string; // exact substring in User Prompt for auditability
   confidence: number; // 0.0 to 1.0
   reasoning?: string; // why this was classified as hard/soft/negative
+  scope?: 'product' | 'cart'; // 'product' vs 'cart'
+  targetProductCategory?: string | null; // specific category target if applicable
 }
 
 export interface BudgetConstraint {
@@ -168,6 +170,66 @@ export interface ExtractedProduct {
   shippingOrDelivery: string | null;
   warrantyOrReturns: string | null;
   evidenceMap: Record<string, string>;
+  parsedQuantity?: number | null;
+  unitPrice?: {
+    amount: number | null;
+    currency: string;
+    sourceText: string | null;
+  } | null;
+  lineTotal?: {
+    amount: number | null;
+    currency: string;
+  } | null;
+}
+
+// ============================================================================
+// CHECKPOINT 14C.1: MULTI-PRODUCT & SHOPPING CART EVALUATION TYPES
+// ============================================================================
+
+export interface CartItemEvaluation {
+  productId: string;
+  productName: string;
+  category: string | null;
+  quantity: number | null;
+  quantitySourceText: string | null;
+  unitPrice: number | null;
+  unitPriceSourceText: string | null;
+  lineTotal: number | null;
+  isMissingQuantity: boolean;
+  isMissingUnitPrice: boolean;
+}
+
+export interface CartConstraintVerification {
+  id: string; // e.g. "CV1"
+  constraintId: string;
+  constraintAttribute: string; // e.g. "cart_total_price"
+  constraintType: 'hard' | 'soft';
+  polarity: 'positive' | 'negative';
+  status: VerificationStatus;
+  operator: ConstraintOperator;
+  expectedValue: number | string;
+  actualCartTotal: number | null;
+  items: CartItemEvaluation[];
+  constraintEvidence: string;
+  claimEvidence: string[];
+  reason: string;
+  method: VerificationMethod;
+  confidence: number;
+}
+
+export interface CartEvaluationResult {
+  hasCartEvaluation: boolean;
+  cartItems: CartItemEvaluation[];
+  calculatedCartTotal: number | null;
+  statedCartTotal: number | null;
+  effectiveCartTotal: number | null;
+  isCartTotalComplete: boolean;
+  totalDisagreement?: boolean;
+  ambiguousStatedTotal?: boolean;
+  verifications: CartConstraintVerification[];
+  cartHardGateState: HardGateState;
+  hasCartFailure: boolean;
+  rationale: string;
 }
 
 export interface ExtractedClaim {
@@ -261,6 +323,7 @@ export interface VerificationEngineResult {
     softUnknown: number;
     conflictsCount: number;
   };
+  cartEvaluation?: CartEvaluationResult;
   rawJson?: Record<string, unknown>;
 }
 
@@ -762,6 +825,9 @@ export interface FinalEvaluationSummary {
   totalUnresolvedUnknown: number;
   totalUnverifiedFactualClaims: number;
   unknownExplicitNote: string; // "UNKNOWN requirements are not counted as failures."
+  cartHardGateState?: HardGateState;
+  cartTotal?: number | null;
+  cartBudgetLimit?: number | null;
 }
 
 export interface TraceabilityReferenceItem {
@@ -783,6 +849,7 @@ export interface FinalEvaluationResult {
   hardGateAuthoritative: boolean; // strictly true
   summary: FinalEvaluationSummary;
   productVerdicts: ProductFinalVerdict[];
+  cartEvaluation?: CartEvaluationResult;
   requirementCoverage: {
     confirmedSatisfied: RequirementCoverageItem[];
     confirmedFailed: RequirementCoverageItem[];

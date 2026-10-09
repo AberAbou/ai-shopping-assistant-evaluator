@@ -1,3 +1,4 @@
+import { reconcilePromptCart } from './shoppingCartSemantics';
 import {
   ExtractedIntent,
   AtomicConstraint,
@@ -30,7 +31,9 @@ export function analyzeUserPromptDeterministically(userPrompt: string): UserProm
     polarity: ConstraintPolarity,
     sourceText: string,
     confidence: number = 0.95,
-    reasoning?: string
+    reasoning?: string,
+    scope: 'product' | 'cart' = 'product',
+    targetProductCategory?: string | null
   ) => {
     // Verify sourceText is in the prompt
     let cleanSource = sourceText.replace(/[,\.;]+$/, '').trim();
@@ -49,10 +52,12 @@ export function analyzeUserPromptDeterministically(userPrompt: string): UserProm
       sourceText: cleanSource,
       confidence,
       reasoning,
+      scope,
+      targetProductCategory: targetProductCategory || null,
     });
   };
 
-  // 1. Target Category Extraction
+  // 1. Target Category Extraction (Supporting single and multi-item requests)
   let targetCategory: string | null = null;
   const categoryPatterns = [
     { regex: /\b(jackets?|outerwear|coats?)\b/i, category: 'jacket' },
@@ -61,45 +66,32 @@ export function analyzeUserPromptDeterministically(userPrompt: string): UserProm
     { regex: /\b(backpacks?|daypack|bags?)\b/i, category: 'backpack' },
     { regex: /\b(headphones?|earbuds?)\b/i, category: 'headphones' },
     { regex: /\b(laptops?|notebooks?)\b/i, category: 'laptop' },
-    { regex: /\b(t-shirts?|shirts?|tops?)\b/i, category: 'shirt' },
+    { regex: /\b(t-shirts?|shirts?|running shirts?|tops?)\b/i, category: 'shirt' },
+    { regex: /\b(running shorts?|shorts?)\b/i, category: 'shorts' },
+    { regex: /\b(pants?|leggings?|tights?)\b/i, category: 'pants' },
+    { regex: /\b(socks?)\b/i, category: 'socks' },
     { regex: /\b(watches?|smartwatch)\b/i, category: 'watch' },
   ];
 
+  const detectedCategories: Array<{ category: string; source: string }> = [];
   for (const cat of categoryPatterns) {
     const m = text.match(cat.regex);
     if (m) {
-      targetCategory = cat.category;
-      evidenceMap['targetCategory'] = m[0];
-      break;
+      if (!detectedCategories.some(c => c.category === cat.category)) {
+        detectedCategories.push({ category: cat.category, source: m[0] });
+      }
     }
   }
 
-  // 2. Budget / Price Constraint Extraction
-  let budgetConstraint: { maxAmount: number | null; minAmount: number | null; currency: string; sourceText: string } | null = null;
-  const budgetMatch = text.match(/\b(?:under|below|less than|max(?:imum)? of|up to)\s*\$?([0-9]+(?:\.[0-9]{2})?)\b/i) ||
-                      text.match(/\$([0-9]+(?:\.[0-9]{2})?)\s*(?:or less|budget|max)\b/i);
-
-  if (budgetMatch) {
-    const amount = parseFloat(budgetMatch[1]);
-    const source = budgetMatch[0];
-    budgetConstraint = {
-      maxAmount: amount,
-      minAmount: null,
-      currency: 'USD',
-      sourceText: source,
-    };
-    evidenceMap['budget'] = source;
-    addConstraint(
-      'price',
-      /\b(?:under|below|less than)\b/i.test(source) ? '<' : '<=',
-      amount,
-      'hard',
-      'positive',
-      source,
-      0.99,
-      'Price ceiling explicitly stated as hard upper bound'
-    );
+  if (detectedCategories.length > 0) {
+    targetCategory = detectedCategories.length === 1
+      ? detectedCategories[0].category
+      : detectedCategories.map(c => c.category).join(', ');
+    evidenceMap['targetCategory'] = detectedCategories.map(c => c.source).join(', ');
   }
+
+  // Monetary and quantity constraints are reconciled by the shared cart parser.
+  const budgetConstraint = null;
 
   // 3. Negative Constraints / Exclusions (e.g., "without leather", "no leather", "leather-free", "fragrance-free")
   const explicitExclusions: string[] = [];
@@ -318,7 +310,7 @@ export function analyzeUserPromptDeterministically(userPrompt: string): UserProm
   const softCount = constraints.filter((c) => c.constraintType === 'soft').length;
   const negativeCount = constraints.filter((c) => c.polarity === 'negative').length;
 
-  return {
+  return reconcilePromptCart({
     state: 'PROMPT_ANALYSIS_COMPLETE_FULL_EVALUATION_NOT_YET_RUN',
     analyzedAt: new Date().toISOString(),
     userPrompt: text,
@@ -340,5 +332,5 @@ export function analyzeUserPromptDeterministically(userPrompt: string): UserProm
         analyzedChars: text.length,
       },
     },
-  };
+  }, text);
 }

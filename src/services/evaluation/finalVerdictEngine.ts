@@ -150,14 +150,14 @@ export function runFinalVerdictEngine(
       (rc) =>
         rc.productId === pId ||
         (rc.productName && pName && rc.productName.toLowerCase() === pName.toLowerCase()) ||
-        (products.length === 1 && (!rc.productId || rc.productId === 'P1'))
+        (products.length === 1 && rc.productName !== 'Shopping Cart' && (!rc.productId || rc.productId === 'P1'))
     );
 
     const pRecs = recommendationResult.recommendations.filter(
       (r) =>
         r.productId === pId ||
         (r.productName && pName && r.productName.toLowerCase() === pName.toLowerCase()) ||
-        (products.length === 1 && (!r.productId || r.productId === 'P1'))
+        (products.length === 1 && r.productName !== 'Shopping Cart' && (!r.productId || r.productId === 'P1'))
     );
 
     // Hard requirements decomposition
@@ -265,9 +265,24 @@ export function runFinalVerdictEngine(
   // ==========================================================================
   // 2. RESPONSE-LEVEL FINAL VERDICT (Deterministic Rules)
   // ==========================================================================
-  // Rule 1: FAIL if at least one recommended product has an authoritative HARD_GATE_FAIL
-  // Rule 2: INDETERMINATE if no HARD_GATE_FAIL, but at least one product is HARD_GATE_INDETERMINATE
-  // Rule 3: PASS only if EVERY evaluated recommended product is HARD_GATE_PASS
+  // Rule 0: Cart-Wide Hard Gate Integration (Checkpoint 14C.1)
+  // A confirmed cart-wide hard-constraint violation must override passing individual-product scores and produce overall FAIL.
+  const hasCartFail = Boolean(
+    verificationResult.cartEvaluation?.hasCartFailure ||
+    verificationResult.cartEvaluation?.cartHardGateState === 'HARD_GATE_FAIL'
+  );
+  const hasCartIndeterminate = Boolean(
+    verificationResult.cartEvaluation?.hasCartEvaluation &&
+    verificationResult.cartEvaluation?.cartHardGateState === 'HARD_GATE_INDETERMINATE'
+  );
+  const isCartPass = Boolean(
+    !verificationResult.cartEvaluation?.hasCartEvaluation ||
+    verificationResult.cartEvaluation?.cartHardGateState === 'HARD_GATE_PASS'
+  );
+
+  // Rule 1: FAIL if at least one recommended product has an authoritative HARD_GATE_FAIL or cart fails
+  // Rule 2: INDETERMINATE if no HARD_GATE_FAIL, but at least one product or cart is HARD_GATE_INDETERMINATE
+  // Rule 3: PASS only if EVERY evaluated recommended product is HARD_GATE_PASS and cart is PASS
   const hasAnyFailProduct = productVerdicts.some((pv) => pv.verdict === 'FAIL' || pv.hardGateState === 'HARD_GATE_FAIL');
   const hasAnyIndeterminateProduct = productVerdicts.some((pv) => pv.verdict === 'INDETERMINATE' || pv.hardGateState === 'HARD_GATE_INDETERMINATE');
   const allPassProducts = productVerdicts.length > 0 && productVerdicts.every((pv) => pv.verdict === 'PASS' && pv.hardGateState === 'HARD_GATE_PASS');
@@ -275,10 +290,18 @@ export function runFinalVerdictEngine(
   let finalVerdict: FinalVerdictState = 'INDETERMINATE';
   let verdictRationale = '';
 
-  if (hasAnyFailProduct) {
+  if (hasAnyFailProduct || hasCartFail) {
     finalVerdict = 'FAIL';
     const failingProducts = productVerdicts.filter((pv) => pv.verdict === 'FAIL');
-    if (productVerdicts.length === 1) {
+
+    if (hasCartFail && failingProducts.length === 0) {
+      const cartEval = verificationResult.cartEvaluation!;
+      const failingVerification = cartEval.verifications.find((v) => v.status === 'FAIL') || cartEval.verifications[0];
+      verdictRationale = `Final verdict: FAIL because a mandatory shopping-cart requirement was violated. ${failingVerification?.reason ?? cartEval.rationale} Individual product evaluations remain independent.`;
+    } else if (hasCartFail && failingProducts.length > 0) {
+      const failNames = failingProducts.map((p) => p.productName).join(', ');
+      verdictRationale = `Final verdict: FAIL because individual product requirements failed (${failNames}) and a mandatory shopping-cart requirement was violated. ${verificationResult.cartEvaluation!.rationale}`;
+    } else if (productVerdicts.length === 1) {
       verdictRationale = failingProducts[0].rationale.replace('Product verdict:', 'Final verdict:');
     } else {
       const failNames = failingProducts.map((p) => p.productName).join(', ');
@@ -288,16 +311,20 @@ export function runFinalVerdictEngine(
         : '';
       verdictRationale = `Final verdict: FAIL because ${failingProducts.length} of ${productVerdicts.length} evaluated products (${failNames}) has an authoritative hard-gate failure.${passingNote} Stated non-negotiable requirements were violated.`;
     }
-  } else if (allPassProducts) {
+  } else if (allPassProducts && isCartPass) {
     finalVerdict = 'PASS';
-    if (productVerdicts.length === 1) {
+    if (verificationResult.cartEvaluation?.hasCartEvaluation) {
+      verdictRationale = `Final verdict: PASS because individual product requirements and mandatory cart requirements are satisfied. ${verificationResult.cartEvaluation.rationale} Optional constraints do not override mandatory gates. UNVERIFIED claims are not assumed false.`;
+    } else if (productVerdicts.length === 1) {
       verdictRationale = productVerdicts[0].rationale.replace('Product verdict:', 'Final verdict:');
     } else {
       verdictRationale = `Final verdict: PASS because all ${productVerdicts.length} evaluated recommended products affirmatively satisfy their mandatory requirements. Some factual product claims remain externally UNVERIFIED; UNVERIFIED claims are not assumed false and do not override the satisfied hard gates.`;
     }
-  } else if (hasAnyIndeterminateProduct || productVerdicts.length === 0) {
+  } else if (hasAnyIndeterminateProduct || hasCartIndeterminate || productVerdicts.length === 0) {
     finalVerdict = 'INDETERMINATE';
-    if (productVerdicts.length === 1) {
+    if (hasCartIndeterminate && !hasAnyIndeterminateProduct) {
+      verdictRationale = `Final verdict: INDETERMINATE because mandatory cart evidence remains unresolved. ${verificationResult.cartEvaluation!.rationale}`;
+    } else if (productVerdicts.length === 1) {
       verdictRationale = productVerdicts[0].rationale.replace('Product verdict:', 'Final verdict:');
     } else {
       verdictRationale = `Final verdict: INDETERMINATE because no evaluated product has a confirmed mandatory failure, but one or more mandatory requirements remain UNKNOWN across the evaluated options. UNKNOWN requirements are not counted as failures.`;
@@ -398,6 +425,9 @@ export function runFinalVerdictEngine(
     totalUnresolvedUnknown,
     totalUnverifiedFactualClaims: externallyUnverifiedFactualClaims,
     unknownExplicitNote: 'UNKNOWN requirements are not counted as failures.',
+    cartHardGateState: verificationResult.cartEvaluation?.cartHardGateState,
+    cartTotal: verificationResult.cartEvaluation?.effectiveCartTotal,
+    cartBudgetLimit: verificationResult.cartEvaluation?.verifications.find(v => ['cart_total_price', 'cart_budget'].includes(v.constraintAttribute))?.expectedValue != null ? Number(verificationResult.cartEvaluation.verifications.find(v => ['cart_total_price', 'cart_budget'].includes(v.constraintAttribute))!.expectedValue) : null,
   };
 
   return {
@@ -408,6 +438,7 @@ export function runFinalVerdictEngine(
     hardGateAuthoritative: true,
     summary,
     productVerdicts,
+    cartEvaluation: verificationResult.cartEvaluation,
     requirementCoverage: {
       confirmedSatisfied,
       confirmedFailed,

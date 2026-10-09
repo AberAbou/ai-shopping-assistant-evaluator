@@ -7,7 +7,13 @@ import {
   VerificationEngineResult,
   VerificationStatus,
   VerificationMethod,
+  CartItemEvaluation,
+  CartConstraintVerification,
+  CartEvaluationResult,
+  HardGateState,
 } from '../../types/evaluation';
+import { isCartConstraint, appliesToProduct } from './shoppingCartSemantics';
+import { evaluateShoppingCart } from './shoppingCartEngine';
 
 /**
  * Deterministic and semantic verification engine.
@@ -77,6 +83,9 @@ export function verifyProductConstraintsDeterministically(
     return { hasConflict: false, conflictingEvidence: [] };
   };
 
+  const cartConstraints = constraints.filter(isCartConstraint);
+  const productConstraints = constraints.filter(c => !isCartConstraint(c));
+
   for (const product of effectiveProducts) {
     const pId = product.id;
     const pName = product.name;
@@ -85,6 +94,8 @@ export function verifyProductConstraintsDeterministically(
     const productClaims = claims.filter(
       (c) => c.productId === pId || (effectiveProducts.length === 1 && !c.productId)
     );
+
+    const relevantProductConstraints = productConstraints.filter(c => appliesToProduct(c, product));
 
     const summary: ProductVerificationSummary = {
       productId: pId,
@@ -101,7 +112,7 @@ export function verifyProductConstraintsDeterministically(
       negativeConstraintsUnknown: 0,
     };
 
-    for (const constraint of constraints) {
+    for (const constraint of relevantProductConstraints) {
       summary.totalConstraintsChecked++;
 
       let status: VerificationStatus = 'UNKNOWN';
@@ -135,7 +146,13 @@ export function verifyProductConstraintsDeterministically(
             const maxAllowed = typeof expectedVal === 'number' ? expectedVal : parseFloat(String(expectedVal));
             claimEvidence = product.price.sourceText ? [product.price.sourceText] : [`$${statedPrice}`];
 
-            if (!isNaN(maxAllowed)) {
+            if (product.price.currency !== 'USD') {
+              status = 'UNKNOWN';
+              reason = `The stated product currency '${product.price.currency || 'Unknown'}' cannot be compared with a USD price requirement without currency conversion.`;
+            } else if (product.unitPrice === null) {
+              status = 'UNKNOWN';
+              reason = 'The product evidence does not establish an unambiguous USD unit price; price compliance remains UNKNOWN.';
+            } else if (!isNaN(maxAllowed)) {
               const comparison: Record<string, { matches: boolean; boundary: string }> = {
                 '<': { matches: statedPrice < maxAllowed, boundary: 'strictly below' },
                 less_than: { matches: statedPrice < maxAllowed, boundary: 'strictly below' },
@@ -309,13 +326,24 @@ export function verifyProductConstraintsDeterministically(
         // CASE F: ACTIVITY / USE-CASE SUITABILITY (trail running, running, hiking)
         else if (attr === 'use_case' || op === 'suitable_for') {
           const activityName = String(expectedVal).toLowerCase();
-          const activityClaim = productClaims.find(
+          const activityClaims = productClaims.filter(
             (c) => (c.claimType === 'suitability' || c.claimType === 'feature') &&
                    (!pName || c.sourceText.trim().toLowerCase() !== pName.trim().toLowerCase()) &&
-                   new RegExp(`\\b${activityName}\\b`, 'i').test(c.sourceText)
+                   new RegExp(`\\b${activityName}\\b`, 'i').test(c.attribute === 'use_case' ? String(c.value) : c.sourceText)
           );
-
-          if (activityClaim) {
+          const deniesActivity = (c: ExtractedClaim) => c.operator === 'not_suitable_for' || (c.operator !== 'suitable_for' && /\b(?:not|never)\s+(?:specifically\s+)?(?:designed|built|engineered|crafted|made|intended|suitable|ideal|perfect|great)\b|\bunsuitable\b/i.test(c.sourceText));
+          const negative = activityClaims.find(deniesActivity);
+          const activityClaim = activityClaims.find(c => !deniesActivity(c));
+          if (negative && activityClaim) {
+            status = 'UNKNOWN';
+            conflictDetected = true;
+            claimEvidence = [activityClaim.sourceText, negative.sourceText];
+            reason = `Conflicting activity suitability claims for ${pName}; suitability for ${activityName} remains UNKNOWN.`;
+          } else if (negative) {
+            status = 'FAIL';
+            claimEvidence = [negative.sourceText];
+            reason = `Product explicitly denies suitability for ${activityName}.`;
+          } else if (activityClaim) {
             status = 'PASS';
             method = 'deterministic';
             confidence = 0.95;
@@ -436,6 +464,10 @@ export function verifyProductConstraintsDeterministically(
     productSummaries[pId] = summary;
   }
 
+  const cartResult = evaluateShoppingCart(cartConstraints, products, claims, nextId);
+  const cartEvaluation = cartResult.cartEvaluation;
+  records.push(...cartResult.records);
+
   // Calculate Overall Summary
   const totalPass = records.filter((r) => r.status === 'PASS').length;
   const totalFail = records.filter((r) => r.status === 'FAIL').length;
@@ -470,9 +502,11 @@ export function verifyProductConstraintsDeterministically(
       softUnknown,
       conflictsCount,
     },
+    cartEvaluation,
     rawJson: {
       records,
       productSummaries,
+      cartEvaluation,
       metadata: {
         engine: 'deterministic-semantic-verifier-v1',
         totalRecords: records.length,

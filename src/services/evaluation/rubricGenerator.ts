@@ -9,6 +9,7 @@ import {
   HardGateState,
   SoftPreferenceState,
 } from '../../types/evaluation';
+import { appliesToProduct } from './shoppingCartSemantics';
 
 /**
  * Generates an auditable, dynamic rubric criterion title and description from an atomic constraint.
@@ -240,7 +241,11 @@ export function generateAndEvaluateRubrics(
   let indetGate = 0;
 
   for (const product of effectiveProducts) {
-    const evaluation = evaluateProductRubric(product, criterionTemplates, verificationResult.records);
+    const relevantTemplates = criterionTemplates.filter(template => {
+      const constraint = constraints.find(c => c.id === template.sourceConstraintId)!;
+      return appliesToProduct(constraint, product);
+    });
+    const evaluation = evaluateProductRubric(product, relevantTemplates, verificationResult.records);
     productEvaluations[product.id] = evaluation;
     productsList.push(evaluation);
 

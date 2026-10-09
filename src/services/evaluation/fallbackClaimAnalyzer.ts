@@ -1,3 +1,4 @@
+import { reconcileClaimCart, extractQuantity, productCategory } from './shoppingCartSemantics';
 import {
   ExtractedProduct,
   ExtractedClaim,
@@ -67,15 +68,40 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
     startIndex: number;
     endIndex: number;
     rawSnippet: string;
+    detectedQuantity?: string | null;
+    parsedQuantity?: number | null;
+    unitPriceAmount?: number | null;
+    unitPriceSource?: string | null;
   }
 
   const detectedCandidates: ProductCandidate[] = [];
+
+  // Helper to parse quantity string to number
+  const parseQuantityNum = (raw: string | null | undefined): number | null => {
+    if (!raw) return null;
+    const clean = raw.toLowerCase().trim();
+    if (clean === 'a' || clean === 'an' || clean === 'one' || clean === '1' || clean.includes('1 pair')) return 1;
+    if (clean === 'two' || clean === '2' || clean.includes('2 pair')) return 2;
+    if (clean === 'three' || clean === '3') return 3;
+    if (clean === 'four' || clean === '4') return 4;
+    const numMatch = clean.match(/([0-9]+)/);
+    return numMatch ? parseInt(numMatch[1], 10) : null;
+  };
+
+  // Check for stated cart total in output
+  let statedCartTotalAmount: number | null = null;
+  let statedCartTotalSource: string | null = null;
+  const cartSummaryMatch = text.match(/(?:(?:for\s+a\s+)?total\s+(?:of|is|comes\s+to)?|totaling|total:\s*|all\s+items\s+for|in\s+total)\s*\$?([0-9]+(?:\.[0-9]{2})?)/i);
+  if (cartSummaryMatch) {
+    statedCartTotalAmount = parseFloat(cartSummaryMatch[1]);
+    statedCartTotalSource = cartSummaryMatch[0];
+  }
 
   // Pattern 1: Numbered or bullet list items (e.g. "1. Salomon Speedcross 6 - $145", "1. Badger Clear Zinc...")
   const listMatches = text.matchAll(/(?:^|\n)\s*(?:[0-9]+[.)]|\*|-)\s+([A-Za-z0-9\s'®™-]+?)(?:\s*[-–:]\s*|\s*\(\$?|\s+for\s+\$|\n|$)/gi);
   for (const m of listMatches) {
     const rawName = m[1].trim();
-    if (rawName.length > 2 && !rawName.toLowerCase().startsWith('here') && !rawName.toLowerCase().startsWith('two options')) {
+    if (rawName.length > 2 && !rawName.toLowerCase().startsWith('here') && !rawName.toLowerCase().startsWith('two options') && !rawName.toLowerCase().startsWith('total')) {
       const idx = m.index ?? text.indexOf(m[0]);
       detectedCandidates.push({
         name: rawName,
@@ -98,6 +124,69 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
         endIndex: idx + m[0].length,
         rawSnippet: m[0],
       });
+    }
+  }
+
+  // Pattern 2b: Multi-item prose recommendations with prices (e.g. "2 running shirts at $25 each and 1 pair of running shorts at $40" or "a shirt for $25 and shorts for $40")
+  if (detectedCandidates.length === 0) {
+    const multiItemProseRegex = /(?:(?:^|and|,|:|\n)\s*)(?:(?:I\s+recommend|recommend|suggest|get|try|check\s+out)\s+)?((?:(?:[0-9]+|\b(?:one|two|three|four|a|an)\b|\b[0-9]+\s+pairs?\s+of\b|\b[0-9]+\s+units?\b)\s+)?(?:[A-Za-z0-9'®™-]+\s+){0,5}[A-Za-z0-9'®™-]+?)\s+(?:at|for|costing|priced\s+at)\s+\$([0-9]+(?:\.[0-9]{2})?)(?:\s+(?:each|apiece))?/gi;
+    const proseMatches = Array.from(text.matchAll(multiItemProseRegex));
+
+    // Filter out matches that are actually cart totals (e.g. "all items for $90" or "totaling $65")
+    const validProseItems = proseMatches.filter(pm => {
+      const itemDesc = pm[1].toLowerCase().trim();
+      return !itemDesc.includes('all items') && !itemDesc.includes('total') && !itemDesc.includes('items for');
+    });
+
+    if (validProseItems.length >= 2) {
+      for (const vm of validProseItems) {
+        const rawPhrase = vm[1].trim();
+        const priceNum = parseFloat(vm[2]);
+        const fullMatchedSnippet = vm[0];
+        const idx = vm.index ?? text.indexOf(fullMatchedSnippet);
+
+        // Separate quantity from product name
+        const qtyMatch = rawPhrase.match(/^([0-9]+|\b(?:one|two|three|four|a|an)\b|\b[0-9]+\s+pairs?\s+of\b|\b[0-9]+\s+units?\b)\s+(.+)$/i);
+        let parsedQty: number | null = null;
+        let rawQtyStr: string | null = null;
+        let cleanName = rawPhrase;
+
+        if (qtyMatch) {
+          rawQtyStr = qtyMatch[1].trim();
+          parsedQty = parseQuantityNum(rawQtyStr);
+          cleanName = qtyMatch[2].trim();
+        } else {
+          parsedQty = null;
+          rawQtyStr = null;
+        }
+
+        // Capitalize name nicely
+        const formattedName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+
+        detectedCandidates.push({
+          name: formattedName,
+          startIndex: idx,
+          endIndex: idx + fullMatchedSnippet.length,
+          rawSnippet: fullMatchedSnippet,
+          detectedQuantity: rawQtyStr,
+          parsedQuantity: parsedQty,
+          unitPriceAmount: priceNum,
+          unitPriceSource: `$${priceNum}${fullMatchedSnippet.toLowerCase().includes('each') ? ' each' : ''}`,
+        });
+      }
+    }
+  }
+
+  // Quantified item lists remain extractable when a response omits prices.
+  if (detectedCandidates.length === 0) {
+    let cursor = 0;
+    for (const chunk of text.split(/\band\b|,|\n/i)) {
+      const snippet = chunk.trim();
+      const idx = text.indexOf(snippet, cursor);
+      cursor = Math.max(cursor, idx + snippet.length);
+      const quantity = extractQuantity(snippet);
+      const item = snippet.match(/^(?:I\s+(?:recommend|suggest)\s+)?(?:-?\d+(?:\.\d+)?|one|two|three|four|five|six|a|an)\s+(?:pair\s+of\s+)?([a-z0-9 '-]*?\b(?:shirts?|shorts?|shoes?|jackets?|socks?|pants?|sunscreen|backpacks?|headphones?|laptops?|watches?))\b/i);
+      if (item && productCategory(item[1]) && quantity.raw !== null) detectedCandidates.push({ name: item[1], startIndex: idx, endIndex: idx + item[0].length, rawSnippet: snippet, detectedQuantity: quantity.raw, parsedQuantity: quantity.amount });
     }
   }
 
@@ -139,6 +228,7 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
     productName: string;
     sectionText: string;
     startIndex: number;
+    candidate?: ProductCandidate;
   }
 
   const productSections: ProductSection[] = [];
@@ -159,6 +249,7 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
         productName: cur.name,
         sectionText: text.substring(start, end),
         startIndex: start,
+        candidate: cur,
       });
     }
   }
@@ -531,13 +622,66 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
     }
 
     // Assemble Product Record
+    const rawQty = section.candidate?.detectedQuantity || null;
+    const parsedQty = section.candidate?.parsedQuantity ?? parseQuantityNum(rawQty);
+
+    if (parsedQty !== null) {
+      addClaim(
+        pId,
+        pName,
+        'quantity',
+        'factual',
+        'quantity',
+        'equals',
+        parsedQty,
+        rawQty || String(parsedQty),
+        'units',
+        0.98,
+        'Stated recommendation item quantity'
+      );
+      pEvidence['quantity'] = rawQty || String(parsedQty);
+    }
+
+    let lineTotal: { amount: number | null; currency: string } | null = null;
+    if (extractedPrice && extractedPrice.amount !== null && parsedQty !== null) {
+      const lineAmt = parsedQty * extractedPrice.amount;
+      lineTotal = {
+        amount: lineAmt,
+        currency: 'USD',
+      };
+      addClaim(
+        pId,
+        pName,
+        'price',
+        'factual',
+        'line_total',
+        'equals',
+        lineAmt,
+        `$${lineAmt}`,
+        'USD',
+        0.99,
+        'Calculated item line total (quantity × unit price)'
+      );
+    }
+
+    let detectedCategory: string | null = null;
+    const combinedPText = `${pName} ${secText}`.toLowerCase();
+    if (/\b(t-shirts?|shirts?|running shirts?|tops?)\b/i.test(combinedPText)) detectedCategory = 'shirt';
+    else if (/\b(running shorts?|shorts?)\b/i.test(combinedPText)) detectedCategory = 'shorts';
+    else if (/\b(jackets?|outerwear|coats?)\b/i.test(combinedPText)) detectedCategory = 'jacket';
+    else if (/\b(running shoes?|shoes?|sneakers?|boots?)\b/i.test(combinedPText)) detectedCategory = 'running shoes';
+    else if (/\b(sunscreen|sunblock)\b/i.test(combinedPText)) detectedCategory = 'sunscreen';
+
     products.push({
       id: pId,
       name: pName,
       brand: null,
-      category: null,
+      category: detectedCategory,
       price: extractedPrice,
-      quantity: null,
+      quantity: rawQty,
+      parsedQuantity: parsedQty,
+      unitPrice: extractedPrice,
+      lineTotal,
       size: null,
       colors: extractedColors,
       materials: extractedMaterials,
@@ -552,6 +696,23 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
     });
   });
 
+  // Response-Level Cart Claims (if cart total was stated)
+  if (statedCartTotalAmount !== null) {
+    addClaim(
+      null,
+      null,
+      'price',
+      'factual',
+      'cart_total_price',
+      'equals',
+      statedCartTotalAmount,
+      statedCartTotalSource || `$${statedCartTotalAmount}`,
+      'USD',
+      0.99,
+      'Stated combined cart total across all recommended items'
+    );
+  }
+
   const factualCount = claims.filter(c => c.nature === 'factual').length;
   const subjectiveCount = claims.filter(c => c.nature === 'subjective').length;
 
@@ -560,7 +721,7 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
     claimsPerProduct[p.id] = claims.filter(c => c.productId === p.id).length;
   });
 
-  return {
+  return reconcileClaimCart({
     state: 'CLAIM_ANALYSIS_COMPLETE',
     analyzedAt: new Date().toISOString(),
     llmOutput: text,
@@ -581,5 +742,5 @@ export function analyzeLlmOutputDeterministically(llmOutput: string): LlmOutputC
         analyzedLength: text.length,
       },
     },
-  };
+  }, text);
 }

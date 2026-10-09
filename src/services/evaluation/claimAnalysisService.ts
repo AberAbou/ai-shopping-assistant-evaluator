@@ -1,5 +1,6 @@
 import { LlmOutputClaimAnalysisResult, ExtractedProduct, ExtractedClaim } from '../../types/evaluation';
 import { analyzeLlmOutputDeterministically } from './fallbackClaimAnalyzer';
+import { reconcileClaimCart } from './shoppingCartSemantics';
 
 /**
  * Service to execute automatic analysis of the shopping assistant's LLM Output.
@@ -29,7 +30,7 @@ export async function analyzeLlmOutput(llmOutput: string): Promise<LlmOutputClai
     if (response.ok) {
       const data = await response.json();
       if (data && Array.isArray(data.products) && Array.isArray(data.claims)) {
-        return data as LlmOutputClaimAnalysisResult;
+        return reconcileClaimCart(data as LlmOutputClaimAnalysisResult, cleanOutput);
       }
     }
   } catch (_err) {

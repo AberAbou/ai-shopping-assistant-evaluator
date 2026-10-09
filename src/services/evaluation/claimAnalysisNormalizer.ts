@@ -1,3 +1,4 @@
+import { reconcileClaimCart } from './shoppingCartSemantics';
 import {
   ExtractedProduct,
   ExtractedClaim,
@@ -180,7 +181,7 @@ export function normalizeClaimAnalysis(
     claimsPerProduct[p.id] = normalizedClaims.filter(c => c.productId === p.id).length;
   });
 
-  return {
+  return reconcileClaimCart({
     state: 'CLAIM_ANALYSIS_COMPLETE',
     analyzedAt: new Date().toISOString(),
     llmOutput: text,
@@ -194,5 +195,5 @@ export function normalizeClaimAnalysis(
       claimsPerProduct,
     },
     rawJson: rawModelOutput,
-  };
+  }, text);
 }

@@ -345,6 +345,94 @@ export const FinalEvaluationView: React.FC<FinalEvaluationViewProps> = ({
         </div>
       </div>
 
+      {/* 3B. SHOPPING CART EVALUATION (Checkpoint 14C.1) */}
+      {finalEvaluationResult.cartEvaluation?.hasCartEvaluation && (
+        <div className="p-4 rounded-xl border border-indigo-800/60 bg-gradient-to-r from-indigo-950/40 via-slate-950 to-slate-950 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-900/40 pb-2.5">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-indigo-300 font-mono flex items-center gap-2">
+                Shopping Cart Evaluation & Combined Budget
+              </h4>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-mono text-slate-400">Cart Gate:</span>
+              {getHardGateBadge(finalEvaluationResult.cartEvaluation.cartHardGateState)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
+              <span className="text-[10px] font-mono uppercase text-slate-400 block">Calculated Cart Total</span>
+              <div className="text-lg font-bold font-mono text-slate-100 tabular-nums">
+                {finalEvaluationResult.cartEvaluation.calculatedCartTotal !== null
+                  ? `$${finalEvaluationResult.cartEvaluation.calculatedCartTotal}`
+                  : 'N/A (Incomplete)'}
+              </div>
+              <span className="text-[10px] text-slate-500 block">Sum of (Qty × Unit Price)</span>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
+              <span className="text-[10px] font-mono uppercase text-slate-400 block">Effective Cart Total</span>
+              <div className="text-lg font-bold font-mono text-indigo-300 tabular-nums">
+                {finalEvaluationResult.cartEvaluation.effectiveCartTotal !== null
+                  ? `$${finalEvaluationResult.cartEvaluation.effectiveCartTotal}`
+                  : 'Unknown'}
+              </div>
+              <span className="text-[10px] text-slate-500 block">
+                {finalEvaluationResult.cartEvaluation.ambiguousStatedTotal
+                  ? 'Stated Total: Ambiguous amount or unsupported currency'
+                  : finalEvaluationResult.cartEvaluation.statedCartTotal !== null
+                  ? `Stated Total: $${finalEvaluationResult.cartEvaluation.statedCartTotal}`
+                  : 'Evaluated Total'}
+              </span>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800">
+              <span className="text-[10px] font-mono uppercase text-slate-400 block">Cart Budget Constraint</span>
+              <div className="text-sm font-semibold font-mono text-slate-200 pt-0.5 truncate">
+                {finalEvaluationResult.cartEvaluation.verifications.find(v => v.constraintAttribute === 'cart_total_price')?.constraintEvidence || 'No combined budget stated'}
+              </div>
+              <span className="text-[10px] text-slate-500 block truncate">
+                Status: {finalEvaluationResult.cartEvaluation.verifications.find(v => v.constraintAttribute === 'cart_total_price')?.status || 'Not specified'}
+              </span>
+            </div>
+          </div>
+
+          {/* Cart Item Breakdown Table */}
+          <div className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/60">
+            <table className="w-full text-left text-xs font-mono">
+              <thead className="bg-slate-900/80 text-[10px] text-slate-400 uppercase border-b border-slate-800">
+                <tr>
+                  <th className="py-2 px-3">Item</th>
+                  <th className="py-2 px-3">Quantity</th>
+                  <th className="py-2 px-3">Unit Price</th>
+                  <th className="py-2 px-3 text-right">Line Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {finalEvaluationResult.cartEvaluation.cartItems.map((item, idx) => (
+                  <tr key={idx} className="hover:bg-slate-900/40">
+                    <td className="py-2 px-3 text-slate-200 font-semibold">{item.productName}</td>
+                    <td className="py-2 px-3 text-slate-400">{item.quantity ?? 'Unknown'}</td>
+                    <td className="py-2 px-3 text-slate-300">
+                      {item.unitPrice !== null ? `$${item.unitPrice}` : 'Missing'}
+                    </td>
+                    <td className="py-2 px-3 text-right font-bold text-slate-200">
+                      {item.lineTotal !== null ? `$${item.lineTotal}` : 'N/A'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="text-xs text-slate-300 font-sans leading-relaxed pt-0.5">
+            {finalEvaluationResult.cartEvaluation.rationale}
+          </p>
+        </div>
+      )}
+
       {/* 4. PRODUCT-LEVEL VERDICTS (Preserving Product Isolation) */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">

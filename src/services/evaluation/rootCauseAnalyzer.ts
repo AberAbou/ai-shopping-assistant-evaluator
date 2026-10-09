@@ -366,6 +366,28 @@ export function analyzeRootCauses(
     }
   }
 
+  // Aggregate Cart-Wide Root Causes (Checkpoints 14C.1)
+  if (verificationResult.cartEvaluation && verificationResult.cartEvaluation.cartHardGateState !== 'HARD_GATE_PASS') {
+    const cartEval = verificationResult.cartEvaluation;
+    const failingVerification = cartEval.verifications.find((v) => v.constraintType === 'hard' && v.status === (cartEval.hasCartFailure ? 'FAIL' : 'UNKNOWN'));
+    records.push({
+      causeId: generateCauseId(),
+      code: cartEval.hasCartFailure ? 'HC-01' : 'RET-01',
+      category: cartEval.hasCartFailure ? 'HARD_CONSTRAINT_VIOLATION' : 'INSUFFICIENT_REQUIREMENT_EVIDENCE',
+      role: 'primary',
+      productId: null,
+      productName: 'Shopping Cart',
+      constraintIds: failingVerification ? [failingVerification.constraintId] : [],
+      claimIds: [],
+      verificationIds: failingVerification ? [failingVerification.id] : [],
+      rubricCriterionIds: [],
+      shopperEvidence: failingVerification ? [failingVerification.constraintEvidence] : [],
+      assistantEvidence: cartEval.cartItems.map((it) => `${it.quantity ?? 'Unknown'}x ${it.productName} ($${it.unitPrice ?? '?'}) = $${it.lineTotal ?? '?'}`),
+      explanation: cartEval.rationale || `Combined shopping cart total ($${cartEval.effectiveCartTotal}) violates the shopper's hard budget ceiling.`,
+      confidence: 1.0,
+    });
+  }
+
   // Aggregate Overall Summary
   const primaryIssuesCount = records.filter((r) => r.role === 'primary').length;
   const contributingIssuesCount = records.filter((r) => r.role === 'contributing').length;
