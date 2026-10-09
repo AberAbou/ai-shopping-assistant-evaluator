@@ -157,3 +157,86 @@ test('QA review conversation cart requirements are not repeated in each turn',as
   expect(report).toContain('Turn T1: INDETERMINATE');expect(report).toContain('Turn T2: PASS');
   expect(await download(page)).toBe(report);
 });
+
+for(const [name,input,output] of cases) test(`Plain-English one-click copy preserves ${name} findings`,async({page})=>{
+  await page.addInitScript(()=>{
+    (window as any).plainCopies=[];
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>{(window as any).plainCopies.push(text);}}});
+  });
+  await single(page,input,output,name==='UNKNOWN');
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
+  const editor=page.getByRole('textbox',{name:'Plain-English assessment text',exact:true});
+  const text=await editor.inputValue();
+  expect(await page.evaluate(()=>(window as any).plainCopies)).toEqual([text]);
+  await expect(page.getByText('Plain-English assessment copied.',{exact:true})).toBeVisible();
+  expect(text).toContain(`“${input}”`);expect(text).toContain(`“${output}”`);
+  const authored=text.replace(/“[\s\S]*?”/g,'');
+  expect(authored).not.toMatch(/[#*`|_]|^\s*(?:[-+]|\d+\.)\s/m);
+  expect(authored).not.toMatch(/\b(?:AI|LLM|JSON|algorithms?|automation|models?|pipelines?|C\d+)\b/i);
+  expect(text).toContain('No independent catalog checks, physical tests, or human verification were performed.');
+  if(name==='FAIL') expect(text).toContain('fails the mandatory requirements');
+  if(name==='UNKNOWN'||name==='CONFLICT') expect(text).toContain('cannot be confirmed as meeting');
+  if(name==='optional') {expect(text).toContain('meets the mandatory requirements');expect(text).toContain('do not by themselves establish a mandatory failure');}
+});
+
+test('Plain-English edited text copies exactly as text/plain; Markdown edits stay separate and explicit',async({page,context})=>{
+  await context.grantPermissions(['clipboard-read','clipboard-write']);
+  await single(page,'I need a jacket under $100.','I recommend the TrailAir Jacket for $80.');
+  await page.getByRole('button',{name:'Generate QA Assessment Report',exact:true}).click();
+  const plain=page.getByRole('textbox',{name:'Plain-English assessment text',exact:true});
+  const original=await plain.inputValue();
+  const edited=original.replace('Reviewer name:                 ','Reviewer name: Alex. ')+ '\n\nThe reviewer requests a final price confirmation.';
+  await plain.fill(edited);
+  const markdown=page.getByRole('textbox',{name:'QA assessment report text',exact:true});
+  const md=(await markdown.inputValue())+'\n\nMarkdown-only reviewer note.';await markdown.fill(md);
+  await expect(page.getByText(/Markdown report edits apply only to its existing copy and download controls/)).toBeVisible();
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
+  expect((await page.evaluate(()=>navigator.clipboard.readText())).replace(/\r\n/g,'\n')).toBe(edited);
+  expect(await page.evaluate(async()=> (await navigator.clipboard.read()).flatMap(item=>item.types))).toEqual(['text/plain']);
+  expect(await download(page)).toBe(md);
+  await page.getByRole('button',{name:'Generate QA Assessment Report',exact:true}).click();await expect(plain).toHaveValue(original);
+});
+
+for(const success of [true,false]) test(`Plain-English clipboard fallback ${success?'copies':'offers selected editable text'}`,async({page})=>{
+  await page.addInitScript((success)=>{
+    Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw new Error('Denied');}}});
+    document.execCommand=(command:string)=>{(window as any).fallbackCommand=command;(window as any).fallbackText=(document.activeElement as HTMLTextAreaElement).value;return success;};
+  },success);
+  await single(page,'I need a jacket under $100.','I recommend the TrailAir Jacket for $80.');
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
+  const editor=page.getByRole('textbox',{name:'Plain-English assessment text',exact:true});const text=await editor.inputValue();
+  expect(await page.evaluate(()=>(window as any).fallbackCommand)).toBe('copy');
+  expect(await page.evaluate(()=>(window as any).fallbackText)).toBe(text);
+  expect(await page.locator('textarea[aria-label="Clipboard fallback"]').count()).toBe(0);
+  if(success) await expect(page.getByText('Plain-English assessment copied.',{exact:true})).toBeVisible();
+  else {
+    await expect(page.getByText('Copy is unavailable. Select and copy the plain-English assessment text below.',{exact:true})).toBeVisible();
+    await expect(editor).toBeFocused();
+    expect(await editor.evaluate((el:HTMLTextAreaElement)=>el.selectionEnd-el.selectionStart)).toBe(text.length);
+  }
+});
+
+test('Plain-English conversation copy preserves chronology and reviewer edits; input edits invalidate it',async({page})=>{
+  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async(text:string)=>{(window as any).plainCopy=text;}}}));
+  await conversation(page);await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
+  const editor=page.getByRole('textbox',{name:'Plain-English assessment text',exact:true});const text=await editor.inputValue();
+  expect(text.indexOf('For turn 1')).toBeLessThan(text.indexOf('For turn 2'));expect(text.indexOf('For turn 2')).toBeLessThan(text.indexOf('For turn 3'));
+  expect(text).toContain('conclusion for turn 1 is that the recommendation fails');
+  expect(text).toContain('conclusion for turn 2 is that the recommendation meets');
+  expect(text).toContain('conclusion for turn 3 is that the recommendation cannot be confirmed');
+  expect(text).toContain('requirement revision at this point');expect(text).toContain('originated in turn 2');
+  const edited=text+'\n\nReviewer comments: Please clarify the third request.';await editor.fill(edited);
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();expect(await page.evaluate(()=>(window as any).plainCopy)).toBe(edited);
+  await page.getByRole('combobox',{name:'Evaluated turn'}).selectOption('0');await expect(editor).toHaveCount(0);
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();await expect(editor).toHaveValue(text);
+  await page.getByRole('textbox',{name:'User turn 2',exact:true}).fill('My total budget is under $50.');await expect(editor).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true})).toHaveCount(0);
+});
+
+test('Plain-English single input edits prevent stale copying',async({page})=>{
+  await single(page,'I need a jacket under $100.','I recommend the TrailAir Jacket for $80.');
+  await page.getByRole('button',{name:'Generate QA Assessment Report',exact:true}).click();
+  await page.locator('textarea').nth(0).fill('I need a jacket under $50.');
+  await expect(page.getByRole('textbox',{name:'Plain-English assessment text',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true})).toBeDisabled();
+});

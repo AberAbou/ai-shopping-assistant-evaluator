@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { evaluate } from './helpers/evaluate';
 import { evaluateConversation } from '../src/services/evaluation/conversationEvaluation';
 import { assessmentFindings, buildQaAssessmentReport } from '../src/services/evaluation/qaAssessmentReport';
+import { buildPlainEnglishAssessment } from '../src/services/evaluation/plainEnglishAssessment';
 import { buildExportJsonPayload, buildDetailedProfessionalReport, buildConciseProfessionalReport } from '../src/services/evaluation/reportExportHelper';
 
 const narrative=(text:string)=>text.replace(/(`{3,})\n[\s\S]*?\n\1/g,'');
@@ -156,4 +157,61 @@ test('review: conversation cart findings occur once for each assessed turn',asyn
   assert.equal((report.match(/#### Requirement /g)??[]).length,results.reduce((n,p)=>n+p.verificationResult!.records.length,0));
   assert.equal((report.match(/Verdict: CONFLICT \(UNKNOWN\)/g)??[]).length,1);
   assert.match(report,/Turn T1: INDETERMINATE/);assert.match(report,/Turn T2: PASS/);
+});
+
+const authoredPlain=(text:string)=>text.replace(/“[\s\S]*?”/g,'');
+test('plain English: ordinary paragraphs, exact supplied quotes, and no unsupported certification',async()=>{
+  const input='I need a jacket under $100. # Shopper *note* `verbatim`';
+  const output='I recommend the TrailAir Jacket for $80. # Response *note* `verbatim`';
+  const p=await evaluate(input,output);const before=JSON.stringify(p);
+  const text=buildPlainEnglishAssessment(p);
+  assert.ok(text.includes(`“${input}”`));assert.ok(text.includes(`“${output}”`));
+  assert.ok(!/[#*`|_]|^\s*(?:[-+]|\d+\.)\s/m.test(authoredPlain(text)));
+  assert.ok(!forbidden.test(authoredPlain(text)));
+  assert.match(text,/No independent catalog checks, physical tests, or human verification were performed/);
+  assert.match(text,/Reviewer name: +Review date: +Review decision: Awaiting review/);
+  assert.equal(JSON.stringify(p),before);
+});
+
+for(const [name,input,output,expected] of [
+  ['pass','I need a jacket under $100.','I recommend TrailAir Jacket for $80.','meets the mandatory requirements on the supplied evidence'],
+  ['fail','I need a jacket under $100.','I recommend TrailAir Jacket for $180.','fails the mandatory requirements'],
+  ['unknown','I need a waterproof jacket under $100.','I recommend TrailAir Jacket for $80.','does not provide enough evidence to confirm'],
+  ['conflict','I need a waterproof jacket under $100.','I recommend TrailAir Jacket for $80. It is waterproof. It is not waterproof.','contains conflicting statements'],
+  ['optional','I need a jacket. Ideally, its price should be under $70.','I recommend TrailAir Jacket for $80.','do not by themselves establish a mandatory failure'],
+] as const) test(`plain English: ${name} preserves recorded outcomes and priority`,async()=>{
+  const text=buildPlainEnglishAssessment(await evaluate(input,output));
+  assert.ok(text.includes(expected));
+  if(name==='optional') assert.match(text,/overall conclusion[\s\S]*meets the mandatory requirements/);
+  if(name==='unknown'||name==='conflict') {assert.match(text,/cannot be confirmed as meeting/);assert.ok(!text.includes('recommendation fails the mandatory requirements'));}
+  if(name==='fail') {assert.match(text,/As a priority, revise the recommendation/);assert.match(text,/spending outside the stated limits/);}
+});
+
+test('plain English: cart conflict retains quantities and product evidence isolation',async()=>{
+  const p=await evaluate(test6Input,test6Output);const text=buildPlainEnglishAssessment(p);
+  assert.match(text,/calculated purchase total is \$80, and the stated total is \$60/);
+  assert.equal((text.match(/contains conflicting statements/g)??[]).length,1);
+  assert.equal((text.match(/As a priority, reconcile/g)??[]).length,1);
+  const isolated=await evaluate('I need a waterproof jacket and waterproof boots.','I recommend Alpha Jacket ($40), which is waterproof, and Beta Boots ($30).');
+  const findings=assessmentFindings(isolated);
+  const report=buildPlainEnglishAssessment(isolated);
+  for(const f of findings) {
+    const paragraph=report.split('\n\n').find(s=>s.includes(f.subject)&&s.includes(`“${f.requirement.sourceText}”`));
+    assert.ok(paragraph);
+    for(const evidence of f.evidence) assert.ok(paragraph.includes(`“${evidence}”`));
+    if(f.status==='UNKNOWN') assert.ok(paragraph.includes('does not provide enough evidence'));
+  }
+});
+
+test('plain English: conversation is chronological with revisions and earlier failures',async()=>{
+  const results=await evaluateConversation(turns);const text=buildPlainEnglishAssessment(results[0],results);
+  assert.ok(text.indexOf('For turn 1')<text.indexOf('For turn 2'));assert.ok(text.indexOf('For turn 2')<text.indexOf('For turn 3'));
+  assert.match(text,/conclusion for turn 1[\s\S]*fails the mandatory requirements/);
+  assert.match(text,/conclusion for turn 2[\s\S]*meets the mandatory requirements/);
+  assert.match(text,/conclusion for turn 3[\s\S]*cannot be confirmed/);
+  assert.match(text,/requirement revision at this point/);assert.match(text,/originated in turn 2/);
+  assert.ok(!/\bT\d+\b/.test(authoredPlain(text)));
+  const partial=buildPlainEnglishAssessment(results[2]);
+  assert.equal((partial.match(/has not been assessed here/g)??[]).length,2);
+  assert.ok(!partial.includes('conclusion for turn 1'));
 });
