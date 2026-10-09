@@ -53,7 +53,7 @@ export function cartRequest(text: string): { isCart: boolean; items: RequestedCa
       const match = clause.match(entry.pattern);
       if (!match) continue;
       const before = clause.slice(Math.max(0, (match.index ?? 0) - 55), match.index);
-      const qty = before.match(/(-?\d+(?:\.\d+)?|one|two|three|four|five|six|a|an)\s+(?:pairs?\s+of\s+)?(?:[a-z-]+\s+){0,2}$/i);
+      const qty = before.match(/(-?\d+(?:\.\d+)?|one|two|three|four|five|six|a|an)\s+(?:pairs?\s+of\s+)?(?:(?!and\b|or\b|plus\b|with\b)[a-z-]+,?\s+){0,4}$/i);
       clauseItems.push({ category: entry.category, quantity: parseQuantity(qty?.[1]), sourceText: qty ? qty[0] + match[0] : match[0], hasInvalidQuantity: Boolean(qty && parseQuantity(qty[1]) === null) });
     }
     joinedRequest ||= clauseItems.length > 1 && /\band\b|\bplus\b|,/i.test(clause);
@@ -238,7 +238,7 @@ export function reconcileClaimCart(result: LlmOutputClaimAnalysisResult, text: s
     const total = statedTotalClaims(rawSection)[0];
     const totalIndex = total ? rawSection.indexOf(total.sourceText) : -1;
     const section = totalIndex < 0 ? rawSection : rawSection.slice(0, totalIndex);
-    return { ...mention, section };
+    return { ...mention, start, end, section };
   });
   const products = result.products.map(p => {
     const sameName = result.products.filter(other => other.name.toLowerCase() === p.name.toLowerCase());
@@ -268,14 +268,18 @@ export function reconcileClaimCart(result: LlmOutputClaimAnalysisResult, text: s
     && !isCanonicalFeature(c.attribute.replace(/_negated$/, ''), String(c.value).replace(/^not\s+/i, '')));
   // Rebuild these feature claims from product-bounded raw text in both paths.
   // This prevents truncated API evidence and coordinated negation from inventing positives.
-  for (const p of products) {
-    const relevant = sections.filter(s => s.name === p.name.toLowerCase());
-    const evidence = relevant.length ? relevant.map(s => s.section) : products.length === 1 && p.name === 'Recommended Item' ? [text] : [];
-    const seen = new Set<string>();
-    for (const section of evidence) for (const a of featureAssertions(section)) {
-      const key = `${a.attribute}:${a.negative}:${a.sourceText}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+  for (const a of featureAssertions(text)) {
+    const before=text.slice(0,a.index);
+    const start=Math.max(before.lastIndexOf('.'),before.lastIndexOf(';'),before.lastIndexOf('\n'))+1;
+    const tail=text.slice(a.index+a.sourceText.length);
+    const next=tail.search(/[.;\n]/);
+    const clause=text.slice(start,next<0?text.length:a.index+a.sourceText.length+next);
+    const categories=categoryPatterns.filter(c=>c.pattern.test(clause));
+    // A later sentence naming the jacket overrides the last item's section.
+    // Otherwise use its actual textual item boundary, never an earlier claim.
+    const scoped=categories.length===1?products.filter(p=>p.category===categories[0].category):[];
+    const recipients=categories.length===1 ? (scoped.length===1?scoped:[]) : products.filter(p=>sections.some(s=>s.name===p.name.toLowerCase()&&a.index>=s.start&&a.index<s.end) || (products.length===1&&p.name==='Recommended Item'));
+    for (const p of recipients) {
       claims.push({ id: '', productId: p.id, productName: p.name, claimType: 'feature', nature: 'factual',
         attribute: a.attribute + (a.negative ? '_negated' : ''), operator: a.negative ? 'not_equals' : 'equals',
         value: a.negative ? `not ${a.value}` : a.value, sourceText: a.sourceText, confidence: 0.99 });

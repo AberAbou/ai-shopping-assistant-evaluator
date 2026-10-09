@@ -9,6 +9,49 @@ import { buildQaAssessmentReport, assessmentFindings } from '../src/services/eva
 import { analyzeUserPromptDeterministically as analyzePrompt } from '../src/services/evaluation/fallbackPromptAnalyzer';
 import { normalizePromptAnalysis } from '../src/services/evaluation/promptAnalysisNormalizer';
 import { jacketReplacementTurns as replacementTurns } from '../tests/fixtures/jacketReplacementConversation';
+import { pr9ExactReplacementTurns } from '../tests/fixtures/pr9ExactReplacementConversation';
+
+test('PR 9: exact manual jacket and shoes replacement transcript',async()=>{
+  const results=await evaluateConversation(pr9ExactReplacementTurns);
+  assert.deepEqual(results.map(r=>r.finalEvaluationResult.finalVerdict),['PASS','FAIL','PASS']);
+  for(const [i,r] of results.entries()) {
+    const c=r.promptAnalysis!.constraints;
+    assert.deepEqual(c.filter(c=>c.attribute==='price').map(c=>[c.scope,c.targetProductCategory,c.operator,c.expectedValue,c.sourceTurnId]),[['product',null,'<',100,'T1']]);
+    assert.ok(!c.some(c=>c.attribute==='cart_total_price'||c.attribute==='conversation_issue'));
+    assert.deepEqual(c.filter(c=>c.attribute==='water_resistance').map(c=>[c.targetProductCategory,c.polarity,c.sourceTurnId]),[['jacket',i?'negative':'positive',i?'T2':'T1']]);
+    assert.deepEqual(c.filter(c=>c.attribute==='quantity').map(c=>[c.targetProductCategory,c.expectedValue,c.sourceTurnId]),i?[['running shoes',1,'T1'],['jacket',1,'T2']]:[['jacket',1,'T1'],['running shoes',1,'T1']]);
+    assert.equal(r.inputs.conversation.unresolved.length,0);
+    assert.deepEqual(r.claimAnalysis!.products.map(p=>[p.category,p.parsedQuantity,p.unitPrice?.amount]),[['jacket',1,i===2?85:80],['running shoes',1,70]]);
+    assert.deepEqual(r.verificationResult!.records.filter(v=>v.constraintAttribute==='price').map(v=>[v.productId,v.status]),[['P1','PASS'],['P2','PASS']]);
+    assert.deepEqual(r.verificationResult!.records.filter(v=>v.status!=='PASS').map(v=>[v.constraintAttribute,v.productId,v.status]),i===1?[['breathability','P1','UNKNOWN'],['water_resistance','P1','FAIL']]:[]);
+  }
+  assert.deepEqual(results[2].promptAnalysis!.constraints,results[1].promptAnalysis!.constraints);
+  const text=buildPlainEnglishAssessment(results[2],results);
+  for(const [i,turn] of pr9ExactReplacementTurns.entries()) {
+    assert.ok(text.includes(turn.userPrompt)&&text.includes(turn.llmOutput));
+    assert.ok(text.includes(`Overall, turn ${i+1} ${i===1?'fails':'meets'} the mandatory requirements`));
+  }
+});
+
+test('PR 9: retained per-product budget independently rejects either item at $100',async()=>{
+  for(const category of ['jacket','running shoes']) {
+    const turns=pr9ExactReplacementTurns.map(t=>({...t}));
+    turns[2].llmOutput=turns[2].llmOutput.replace(category==='jacket'?'$85':'$70','$100');
+    const r=(await evaluateConversation(turns))[2];
+    assert.equal(r.finalEvaluationResult.finalVerdict,'FAIL');
+    assert.deepEqual(r.verificationResult!.records.filter(v=>v.status!=='PASS').map(v=>[v.constraintAttribute,v.productId]),[['price',category==='jacket'?'P1':'P2']]);
+    assert.equal(r.promptAnalysis!.constraints.find(c=>c.attribute==='price')!.sourceTurnId,'T1');
+  }
+});
+
+test('PR 9: retention references do not hide a new explicit shoe requirement',async()=>{
+  const turns=pr9ExactReplacementTurns.map(t=>({...t}));
+  turns[2].userPrompt+=' The shoes must be waterproof.';
+  const r=(await evaluateConversation(turns))[2];
+  assert.equal(r.finalEvaluationResult.finalVerdict,'INDETERMINATE',JSON.stringify(r.verificationResult!.records));
+  assert.deepEqual(r.promptAnalysis!.constraints.filter(c=>c.attribute==='water_resistance').map(c=>[c.targetProductCategory,c.polarity,c.sourceTurnId]),[['jacket','negative','T2'],['running shoes','positive','T3']]);
+  assert.deepEqual(r.verificationResult!.records.filter(v=>v.status!=='PASS').map(v=>[v.constraintAttribute,v.productId,v.status]),[['water_resistance','P2','UNKNOWN']]);
+});
 
 test('replacement: old description is referential and non-waterproof is a prohibition in fallback and API normalization',()=>{
   const text=replacementTurns[1].userPrompt;

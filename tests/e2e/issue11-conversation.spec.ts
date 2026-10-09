@@ -2,6 +2,41 @@ import { test,expect,type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { issue11Turns } from '../fixtures/issue11Conversation';
 import { jacketReplacementTurns } from '../fixtures/jacketReplacementConversation';
+import { pr9ExactReplacementTurns } from '../fixtures/pr9ExactReplacementConversation';
+
+test('PR 9: verbatim jacket and shoes review transcript preserves product budgets and exclusions',async({page})=>{
+  await evaluate(page,pr9ExactReplacementTurns);
+  for(const [i,status] of ['PASS','FAIL','PASS'].entries()) {
+    await page.getByRole('combobox',{name:'Evaluated turn'}).selectOption(String(i));
+    await expect(page.getByTestId('conversation-verdict')).toHaveText(`Turn T${i+1}: ${status}`);
+    const json=await exported(page);const a=json.rawUpstreamArtifacts;const c=a.promptAnalysis.constraints;
+    expect(c.filter((c:any)=>c.attribute==='price').map((c:any)=>[c.scope,c.targetProductCategory,c.operator,c.expectedValue,c.sourceTurnId])).toEqual([['product',null,'<',100,'T1']]);
+    expect(c.some((c:any)=>c.attribute==='cart_total_price'||c.attribute==='conversation_issue'||c.sourceTurnId==='T3')).toBe(false);
+    expect(c.filter((c:any)=>c.attribute==='water_resistance').map((c:any)=>[c.targetProductCategory,c.polarity,c.sourceTurnId])).toEqual([['jacket',i?'negative':'positive',i?'T2':'T1']]);
+    expect(c.filter((c:any)=>c.attribute==='quantity').map((c:any)=>[c.targetProductCategory,c.expectedValue,c.sourceTurnId])).toEqual(i?[['running shoes',1,'T1'],['jacket',1,'T2']]:[['jacket',1,'T1'],['running shoes',1,'T1']]);
+    expect(a.claimAnalysis.products.map((p:any)=>[p.category,p.parsedQuantity,p.unitPrice.amount])).toEqual([['jacket',1,i===2?85:80],['running shoes',1,70]]);
+    expect(a.verificationResult.records.filter((v:any)=>v.constraintAttribute==='price').map((v:any)=>[v.productId,v.status])).toEqual([['P1','PASS'],['P2','PASS']]);
+    expect(a.verificationResult.records.filter((v:any)=>v.status!=='PASS').map((v:any)=>[v.constraintAttribute,v.productId,v.status])).toEqual(i===1?[['breathability','P1','UNKNOWN'],['water_resistance','P1','FAIL']]:[]);
+    expect(json.cartEvaluation.calculatedCartTotal).toBe(i===2?155:150);
+    expect(json.inputs.conversation.unresolved).toHaveLength(0);
+  }
+  await page.getByRole('button',{name:'Copy Plain-English Assessment',exact:true}).click();
+  const text=await page.getByRole('textbox',{name:'Plain-English assessment text',exact:true}).inputValue();
+  expect(await page.evaluate(()=>(window as any).plainCopy)).toBe(text);
+  for(const [i,turn] of pr9ExactReplacementTurns.entries()) {
+    expect(text).toContain(turn.userPrompt);expect(text).toContain(turn.llmOutput);
+    expect(text).toContain(`Overall, turn ${i+1} ${i===1?'fails':'meets'} the mandatory requirements`);
+  }
+});
+
+test('PR 9: corrected jacket exclusion cannot prove an added waterproof shoe requirement',async({page})=>{
+  const turns=pr9ExactReplacementTurns.map(t=>({...t}));turns[2].userPrompt+=' The shoes must be waterproof.';
+  await evaluate(page,turns);
+  await expect(page.getByTestId('conversation-verdict')).toHaveText('Turn T3: INDETERMINATE');
+  const json=await exported(page);
+  expect(json.rawUpstreamArtifacts.verificationResult.records.filter((v:any)=>v.status!=='PASS').map((v:any)=>[v.constraintAttribute,v.productId,v.status])).toEqual([['water_resistance','P2','UNKNOWN']]);
+  expect(json.rawUpstreamArtifacts.claimAnalysis.claims.filter((c:any)=>c.productId==='P2'&&c.attribute.startsWith('water_resistance'))).toHaveLength(0);
+});
 
 test('replacement: three-turn jacket changes waterproof polarity while preserving unrelated requirements',async({page})=>{
   await evaluate(page,jacketReplacementTurns);

@@ -76,6 +76,10 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
   }
   const confirmationOnly=/^(?:please\s+)?(?:confirm|restate|summari[sz]e|show)\s+(?:(?:the|my|our)\s+)?(?:(?:final|current|same)\s+)?(?:shopping\s+)?cart(?:\s*[,;:]?\s*(?:and\s+)?(?:quantities|(?:individual|unit)\s+prices|prices|(?:grand\s+)?total))*[.!?\s]*$/i.test(text);
   const retentionPattern=/^(?:please\s+)?keep\s+(?:the\s+)?same\s+(?:products?|items?|cart|quantities)(?:\s+and\s+(?:products?|items?|quantities))*[.!\s]*$/i;
+  const retainedCategory = (clause:string) => state.items.some(item=>{
+    const category=categoryPatterns.find(c=>c.category===item.category)!;
+    return new RegExp(`^(?:please\\s+)?keep\\s+(?:the\\s+)?(?:same\\s+)?(?:running\\s+)?${category.pattern.source}(?:\\s+and\\s+(?:the\\s+)?original\\s+per-product\\s+budget\\s+unchanged)?[.!\\s]*$`,'i').test(clause);
+  });
   const retentionOnly=retentionPattern.test(text);
   const clarification = /\b(?:I mean|I meant|to clarify)\b/i.test(text);
   const withdrawal=text.match(/\b(?:allow|no longer require|remove requirement for)\s+(leather|fragrance|waterproof|breathable|running|hiking)\b/i);
@@ -133,7 +137,7 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       const pattern = categoryPatterns.find(p=>p.category===item.category)!.pattern;
       const counts = [...text.matchAll(new RegExp(pattern.source,'gi'))].flatMap(m=> {
         const prefix=text.slice(Math.max(0,m.index!-55),m.index);
-        const q=prefix.match(/(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s+(?:pair\s+of\s+)?(?:[a-z-]+\s+){0,2}$/i);
+        const q=prefix.match(/(-?\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s+(?:pair\s+of\s+)?(?:(?!and\b|or\b|plus\b|with\b)[a-z-]+,?\s+){0,4}$/i);
         return q ? [parseQuantity(q[1]) ?? q[1].toLowerCase()] : [];
       });
       counts.push(...overrides.filter(i=>i.category===item.category).map(i=>i.quantity??'invalid'));
@@ -162,7 +166,7 @@ function revise(state: State, turn: ConversationTurn, first: boolean): UserPromp
       const referenceClause=local.trim().replace(/[.!]$/,'');
       if(confirmationOnly || retentionOnly || retentionPattern.test(referenceClause)
         || (!first&&state.requirements.some(old=>budgetAttributes.includes(old.attribute))&&budgetAttributes.includes(c.attribute)&&/\b(?:keep|retain|leave)\b/i.test(local)&&/\b(?:original|same|unchanged)\b/i.test(local)&&!/[\d$€£]|\b(?:under|over|below|above|at most|at least)\b/i.test(local))
-        || (c.attribute==='use_case'&&overrides.some(i=>i.sourceText.toLowerCase()===referenceClause.toLowerCase()))) continue;
+        || (c.attribute==='use_case'&&(retainedCategory(referenceClause)||overrides.some(i=>i.sourceText.toLowerCase()===referenceClause.toLowerCase())))) continue;
       if(withdrawal && String(c.expectedValue).toLowerCase().includes(withdrawal[1].toLowerCase())) continue;
       if (!first && budgetAttributes.includes(c.attribute) && !c.targetProductCategory && /\b(?:total|cart|overall|combined|budget)\b/i.test(local) && !/\b(?:each|per item|per product)\b/i.test(local) && state.cart) {
         c.attribute='cart_total_price';c.scope='cart';c.targetProductCategory=null;
